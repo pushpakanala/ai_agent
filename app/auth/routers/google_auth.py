@@ -15,6 +15,7 @@ from app.common.config import (
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
 )
+from app.common.config import GOOGLE_REDIRECT_URI
 
 
 router = APIRouter(
@@ -42,7 +43,7 @@ async def callback(code: str):
         "code": code,
         "client_id": GOOGLE_CLIENT_ID,
         "client_secret": GOOGLE_CLIENT_SECRET,
-        "redirect_uri": "http://localhost:8000/auth/google/callback",
+        "redirect_uri": GOOGLE_REDIRECT_URI,
         "grant_type": "authorization_code",
     }
 

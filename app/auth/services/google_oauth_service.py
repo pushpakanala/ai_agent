@@ -4,8 +4,9 @@ from app.common.config import (
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
 )
+from app.common.config import GOOGLE_REDIRECT_URI
 
-REDIRECT_URI = "http://localhost:8000/auth/google/callback"
+REDIRECT_URI = GOOGLE_REDIRECT_URI
 
 SCOPES = [
     "openid",
