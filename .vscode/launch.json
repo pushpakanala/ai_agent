@@ -1,0 +1,51 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Local",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "main:app",
+                "--reload"
+            ],
+            "env": {
+                "ENV":"Local",
+                "DB_STRING":"mongodb://localhost:27017",
+                "DB_NAME":"ai_agent",
+                "SECRET_KEY": "a95971f2ee72587f535e639e1b9c2f988d61eb183bb93da52fba6e2058615248",
+                "TOKEN_USERNAME": "everyone@louisville",
+                "TOKEN_PWD": "a95971f2ee72587f535e639e1b9c2f9",
+                "OPENAI_API_KEY": "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",
+                "GOOGLE_CLIENT_ID":"261734436749-tt02htftu0na7mdmob3o5jls02ksamei.apps.googleusercontent.com",
+                "GOOGLE_CLIENT_SECRET":"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"
+            },
+            "jinja": true,
+            "justMyCode": true
+        },
+        {
+            "name": "PROD",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "main:app",
+                "--reload"
+            ],
+            "env": {
+                "ENV":"PROD",
+                "DB_STRING":"mongodb://localhost:27017",
+                "DB_NAME":"ai_agent",
+                "SECRET_KEY": "a95971f2ee72587f535e639e1b9c2f988d61eb183bb93da52fba6e2058615248",
+                "TOKEN_USERNAME": "everyone@louisville",
+                "TOKEN_PWD": "a95971f2ee72587f535e639e1b9c2f9",
+                "OPENAI_API_KEY": "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",
+                "GOOGLE_CLIENT_ID":"261734436749-tt02htftu0na7mdmob3o5jls02ksamei.apps.googleusercontent.com",
+                "GOOGLE_CLIENT_SECRET":"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"
+                },     
+            "jinja": true,
+            "justMyCode": true
+        }
+    ]
+}

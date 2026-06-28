@@ -1,0 +1,54 @@
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.security import OAuth2PasswordRequestForm
+from starlette.middleware.cors import CORSMiddleware
+from app.common.logger import get_logger
+from app.common.config import PROJECT_NAME, ALLOWED_HOSTS, DEBUG
+from app.common.db import db
+from app.common.services.exception_handler import EXCEPTION_HANDLERS
+from app.auth.routers.google_auth import (
+    router as google_auth_router
+)
+from app.email.routers.email_router import (
+    router as email_router
+)
+from app.email.routers.contact_router import (
+    router as contact_router
+)
+from contextlib import asynccontextmanager
+import os
+
+logger = get_logger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Application startup and shutdown events.
+    """
+
+    logger.info("Connecting to MongoDB...")
+    db.connect_to_mongo()  # Use await if this is async
+
+    yield
+
+    logger.info("Closing MongoDB connection...")
+    db.close_mongo_connection()  # Use await if this is async
+
+app = FastAPI(
+    title=PROJECT_NAME, exception_handlers=EXCEPTION_HANDLERS, debug=DEBUG, lifespan=lifespan
+)
+
+if not ALLOWED_HOSTS:
+    ALLOWED_HOSTS = ["*"]
+
+# CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_HOSTS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+app.include_router(google_auth_router)
+app.include_router(email_router)
+app.include_router(contact_router)

@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+openai
+mcp
+python-dotenv
+google-auth
+google-auth-oauthlib
+google-api-python-client
+python-jose[cryptography]
+itsdangerous
+httpx
+pymongo
+fastmcp
