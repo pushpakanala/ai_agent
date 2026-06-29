@@ -9,6 +9,12 @@ from app.email.repositories.contact_repository import (
 
 from app.email.models.email_request import EmailRequest
 from app.email.models.search_request import SearchRequest
+from app.email.models.send_template_request import (
+    SendTemplateRequest,
+)
+from app.email.models.send_email_request import (
+    SendEmailRequest,
+)
 
 from app.email.services.openai_service import (
     generate_email,
@@ -26,13 +32,10 @@ from app.email.repositories.email_history_repository import (
     get_email_history,
 )
 
-from app.email.models.send_template_request import (
-    SendTemplateRequest,
-)
-
 from app.template.repositories.template_repository import (
     get_template_by_id_and_user,
 )
+
 
 router = APIRouter(
     prefix="/email",
@@ -41,10 +44,10 @@ router = APIRouter(
 
 
 # ==================================================
-# Send Email
+# Generate Email Draft (NO SEND)
 # ==================================================
-@router.post("/send")
-async def send_email(
+@router.post("/generate")
+async def generate_email_draft(
     req: EmailRequest,
     email: str = Depends(get_current_user),
 ):
@@ -57,7 +60,6 @@ async def send_email(
             detail="User not found",
         )
 
-    # Generate email using OpenAI
     email_data = generate_email(req.prompt)
 
     recipient = email_data.get(
@@ -65,11 +67,8 @@ async def send_email(
         "",
     ).strip()
 
-    # ---------------------------------------------
-    # If recipient is NOT an actual email,
-    # treat it as a saved contact
-    # ---------------------------------------------
-    if "@" not in recipient:
+    # Resolve saved contact names
+    if recipient and "@" not in recipient:
 
         contact = await get_contact_by_name(
             user_email=email,
@@ -87,16 +86,36 @@ async def send_email(
 
         email_data["to_email"] = contact["email"]
 
-    # Send via Gmail MCP
+    return {
+        "draft": email_data,
+    }
+
+
+# ==================================================
+# Actually Send Email
+# ==================================================
+@router.post("/send")
+async def send_email(
+    req: SendEmailRequest,
+    email: str = Depends(get_current_user),
+):
+
+    user = await get_user(email)
+
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found",
+        )
+
     result = await send_email_via_mcp(
         access_token=user["access_token"],
         refresh_token=user["refresh_token"],
-        to_email=email_data["to_email"],
-        subject=email_data["subject"],
-        body=email_data["body"],
+        to_email=req.to_email,
+        subject=req.subject,
+        body=req.body,
     )
 
-    # Extract Gmail message ID
     gmail_message_id = ""
 
     if isinstance(result, dict):
@@ -105,18 +124,18 @@ async def send_email(
             "",
         )
 
-    # Save history
     await save_email_history(
         user_email=email,
-        prompt=req.prompt,
-        to_email=email_data["to_email"],
-        subject=email_data["subject"],
-        body=email_data["body"],
+        prompt="Manual Send",
+        to_email=req.to_email,
+        subject=req.subject,
+        body=req.body,
         gmail_message_id=gmail_message_id,
     )
 
     return {
-        "generated_email": email_data,
+        "status": "success",
+        "gmail_message_id": gmail_message_id,
         "mcp_response": result,
     }
 
@@ -179,7 +198,6 @@ async def search_emails(
             detail="User not found",
         )
 
-    # Convert English -> Gmail Query
     gmail_query = generate_gmail_query(
         req.query
     )
@@ -196,13 +214,16 @@ async def search_emails(
         "results": result,
     }
 
-@router.post("/send-template")
-async def send_template_email(
+
+# ==================================================
+# Generate Template Email (NO SEND)
+# ==================================================
+@router.post("/generate-template")
+async def generate_template_email(
     req: SendTemplateRequest,
     email: str = Depends(get_current_user),
 ):
 
-    # Get logged-in user
     user = await get_user(email)
 
     if not user:
@@ -211,7 +232,6 @@ async def send_template_email(
             detail="User not found",
         )
 
-    # Get template
     template = await get_template_by_id_and_user(
         req.template_id,
         email,
@@ -223,7 +243,6 @@ async def send_template_email(
             detail="Template not found",
         )
 
-    # Replace variables
     try:
 
         final_prompt = template[
@@ -237,18 +256,16 @@ async def send_template_email(
             detail=f"Missing variable: {e.args[0]}",
         )
 
-    # Generate email
     email_data = generate_email(
         final_prompt
     )
 
-    # Resolve contacts
     recipient = email_data.get(
         "to_email",
         "",
     ).strip()
 
-    if "@" not in recipient and recipient:
+    if recipient and "@" not in recipient:
 
         contact = await get_contact_by_name(
             user_email=email,
@@ -259,43 +276,14 @@ async def send_template_email(
             raise HTTPException(
                 status_code=404,
                 detail=(
-                    f"Contact '{recipient}' "
-                    "not found."
+                    f"Contact '{recipient}' not found."
                 ),
             )
 
         email_data["to_email"] = contact["email"]
 
-    # Send email
-    result = await send_email_via_mcp(
-        access_token=user["access_token"],
-        refresh_token=user["refresh_token"],
-        to_email=email_data["to_email"],
-        subject=email_data["subject"],
-        body=email_data["body"],
-    )
-
-    gmail_message_id = ""
-
-    if isinstance(result, dict):
-        gmail_message_id = result.get(
-            "id",
-            "",
-        )
-
-    # Save history
-    await save_email_history(
-        user_email=email,
-        prompt=final_prompt,
-        to_email=email_data["to_email"],
-        subject=email_data["subject"],
-        body=email_data["body"],
-        gmail_message_id=gmail_message_id,
-    )
-
     return {
         "template": template["name"],
         "final_prompt": final_prompt,
-        "generated_email": email_data,
-        "mcp_response": result,
+        "draft": email_data,
     }
