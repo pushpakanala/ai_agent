@@ -43,3 +43,5 @@ GMAIL_SCOPES = [
 ]
 
 SECRET_KEY=os.getenv("SECRET_KEY")
+
+FRONTEND_URL = os.getenv("FRONTEND_URL")

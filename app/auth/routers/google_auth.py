@@ -1,9 +1,10 @@
 import httpx
 import requests
 
-from fastapi import APIRouter
+from fastapi import APIRouter, params
 from fastapi.responses import RedirectResponse
-
+from urllib.parse import urlencode
+from fastapi.responses import RedirectResponse
 from app.auth.repositories.user_repository import save_user
 from app.auth.services.google_oauth_service import (
     get_google_login_url,
@@ -15,7 +16,7 @@ from app.common.config import (
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
 )
-from app.common.config import GOOGLE_REDIRECT_URI
+from app.common.config import GOOGLE_REDIRECT_URI,FRONTEND_URL
 
 
 router = APIRouter(
@@ -96,12 +97,16 @@ async def callback(code: str):
         user_info["email"]
     )
 
-    return {
-        "status": "success",
+    params = urlencode(
+    {
         "token": jwt_token,
-        "user": {
-            "email": user_info["email"],
-            "name": user_info.get("name", ""),
-            "picture": user_info.get("picture"),
-        }
+        "email": user_info["email"],
+        "name": user_info.get("name", ""),
+        "picture": user_info.get("picture", ""),
     }
+)
+
+    return RedirectResponse(
+        url=f"{FRONTEND_URL}/auth/success?{params}",
+        status_code=302,
+    )
