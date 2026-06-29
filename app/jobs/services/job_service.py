@@ -1,15 +1,15 @@
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
-from app.auth.repositories.user_repository import (
-    get_user,
-)
+from app.auth.repositories.user_repository import get_user
 
 from app.jobs.repositories.job_repository import (
     create_job,
     update_job_status,
     get_job_by_job_id,
     get_job_by_company_and_role,
+    is_gmail_message_processed,      # NEW
+    save_processed_gmail_message,    # NEW
 )
 
 from app.jobs.services.gmail_job_service import (
@@ -20,10 +20,14 @@ from app.jobs.services.job_classifier_service import (
     classify_job_email,
 )
 
+from app.auth.repositories.user_repository import (
+    update_last_job_sync_time,       # NEW
+)
 
-# ==========================================
+
+# ==================================================
 # Process Single Job Email
-# ==========================================
+# ==================================================
 async def process_job_email(
     user_email: str,
     job_data: dict,
@@ -38,12 +42,15 @@ async def process_job_email(
     if not company_name or not role:
         return "ignored"
 
-    # ----------------------------
-    # Generate unique key
-    # ----------------------------
+    # --------------------------------------
+    # Unique key
+    # --------------------------------------
     if job_id:
+
         unique_key = f"{user_email}:{job_id}"
+
     else:
+
         unique_key = (
             f"{user_email}:"
             f"{company_name.lower()}:"
@@ -52,28 +59,30 @@ async def process_job_email(
 
     existing_job = None
 
-    # ----------------------------
-    # First: job id
-    # ----------------------------
+    # --------------------------------------
+    # First preference: Job ID
+    # --------------------------------------
     if job_id:
+
         existing_job = await get_job_by_job_id(
             user_email=user_email,
             job_id=job_id,
         )
 
-    # ----------------------------
+    # --------------------------------------
     # Fallback: company + role
-    # ----------------------------
+    # --------------------------------------
     if not existing_job:
+
         existing_job = await get_job_by_company_and_role(
             user_email=user_email,
             company_name=company_name,
             role=role,
         )
 
-    # ----------------------------
-    # Update existing
-    # ----------------------------
+    # --------------------------------------
+    # Update existing job
+    # --------------------------------------
     if existing_job:
 
         if existing_job["status"] != status:
@@ -88,9 +97,9 @@ async def process_job_email(
 
         return "skipped"
 
-    # ----------------------------
+    # --------------------------------------
     # Create new job
-    # ----------------------------
+    # --------------------------------------
     await create_job(
         user_email=user_email,
         job_id=job_id,
@@ -98,38 +107,29 @@ async def process_job_email(
         role=role,
         status=status,
         date_applied=email_date,
-        unique_key=unique_key,   # <-- FIX
+        unique_key=unique_key,
     )
 
     return "created"
 
 
-# ==========================================
-# Main Sync Service
-# ==========================================
-async def sync_jobs(
-    user_email: str,
-):
+# ==================================================
+# Sync Jobs
+# ==================================================
+async def sync_jobs(user_email: str):
 
     user = await get_user(user_email)
 
     if not user:
-        return {
-            "message": "User not found",
-        }
 
-    started_at = user.get(
-        "job_tracking_started_at"
-    )
-
-    if not started_at:
         return {
-            "message": "Initialize tracking first",
+            "message": "User not found"
         }
 
     emails = await fetch_recent_job_emails(
         access_token=user["access_token"],
         refresh_token=user["refresh_token"],
+        last_synced_at=user.get("last_job_sync_at"),
     )
 
     print(f"\nFound {len(emails)} emails")
@@ -144,68 +144,54 @@ async def sync_jobs(
 
         try:
 
-            # ----------------------------------
-            # Parse email date
-            # ----------------------------------
-            raw_date = email_item.get("date", "")
+            gmail_id = email_item.get("gmail_id")
 
-            # Gmail sometimes returns:
-            # Thu, 25 Jun 2026 13:48:05 +0000 (UTC)
+            # --------------------------------------
+            # Skip already processed Gmail messages
+            # --------------------------------------
+            if gmail_id:
 
-            raw_date = raw_date.replace("(UTC)", "").strip()
+                already_processed = (
+                    await is_gmail_message_processed(
+                        user_email=user_email,
+                        gmail_id=gmail_id,
+                    )
+                )
+
+                if already_processed:
+
+                    print(
+                        f"Skipping Gmail ID: {gmail_id}"
+                    )
+
+                    continue
+
+            # --------------------------------------
+            # Parse date
+            # --------------------------------------
+            raw_date = (
+                email_item.get("date", "")
+                .replace("(UTC)", "")
+                .strip()
+            )
 
             try:
-                email_date = parsedate_to_datetime(raw_date)
 
-            except Exception as e:
-                print("DATE PARSE ERROR:", e)
+                email_date = parsedate_to_datetime(
+                    raw_date
+                )
+
+            except Exception:
+
                 email_date = datetime.utcnow()
 
             if email_date.tzinfo:
-                email_date = email_date.astimezone().replace(tzinfo=None)
-
-            if not email_date:
-                email_date = datetime.utcnow()
-
-            elif isinstance(email_date, str):
 
                 email_date = (
                     email_date
-                    .replace("(UTC)", "")
-                    .strip()
+                    .astimezone()
+                    .replace(tzinfo=None)
                 )
-
-                try:
-
-                    email_date = (
-                        parsedate_to_datetime(
-                            email_date
-                        )
-                    )
-
-                except Exception as e:
-
-                    print(
-                        f"Failed to parse date: {email_date}"
-                    )
-
-                    print(e)
-
-                    email_date = datetime.utcnow()
-
-            if email_date.tzinfo:
-
-                email_date = (
-                    email_date.replace(
-                        tzinfo=None
-                    )
-                )
-
-            # ----------------------------------
-            # Ignore old emails
-            # ----------------------------------
-            if email_date < started_at:
-                continue
 
             subject = email_item.get(
                 "subject",
@@ -230,14 +216,22 @@ async def sync_jobs(
                 f"Classification: {classification}"
             )
 
-            # ----------------------------------
+            # --------------------------------------
             # Ignore non-job emails
-            # ----------------------------------
+            # --------------------------------------
             if not classification.get(
                 "is_job_email"
             ):
 
                 ignored += 1
+
+                if gmail_id:
+
+                    await save_processed_gmail_message(
+                        user_email=user_email,
+                        gmail_id=gmail_id,
+                    )
+
                 continue
 
             processed += 1
@@ -249,16 +243,30 @@ async def sync_jobs(
             )
 
             if result == "created":
+
                 created += 1
 
             elif result == "updated":
+
                 updated += 1
 
             elif result == "skipped":
+
                 skipped += 1
 
             else:
+
                 ignored += 1
+
+            # --------------------------------------
+            # Mark Gmail message as processed
+            # --------------------------------------
+            if gmail_id:
+
+                await save_processed_gmail_message(
+                    user_email=user_email,
+                    gmail_id=gmail_id,
+                )
 
         except Exception as e:
 
@@ -266,6 +274,14 @@ async def sync_jobs(
                 "Job sync error:",
                 str(e),
             )
+
+    # --------------------------------------
+    # Update last sync time
+    # --------------------------------------
+    await update_last_job_sync_time(
+        user_email,
+        datetime.utcnow(),
+    )
 
     return {
         "processed": processed,

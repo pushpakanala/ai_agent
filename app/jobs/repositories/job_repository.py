@@ -3,9 +3,9 @@ from datetime import datetime
 from app.common.db import db
 
 
-# ==========================================
+# ==================================================
 # Create Job
-# ==========================================
+# ==================================================
 async def create_job(
     user_email: str,
     job_id: str | None,
@@ -40,9 +40,9 @@ async def create_job(
     return str(result.inserted_id)
 
 
-# ==========================================
+# ==================================================
 # Find By Job ID
-# ==========================================
+# ==================================================
 async def get_job_by_job_id(
     user_email: str,
     job_id: str,
@@ -60,16 +60,39 @@ async def get_job_by_job_id(
     if not result:
         return None
 
-    result["id"] = str(
-        result.pop("_id")
-    )
+    result["id"] = str(result.pop("_id"))
 
     return result
 
 
-# ==========================================
+# ==================================================
+# Find By Unique Key
+# ==================================================
+async def get_job_by_unique_key(
+    user_email: str,
+    unique_key: str,
+):
+
+    jobs = db.db["job_applications"]
+
+    result = jobs.find_one(
+        {
+            "user_email": user_email,
+            "unique_key": unique_key,
+        }
+    )
+
+    if not result:
+        return None
+
+    result["id"] = str(result.pop("_id"))
+
+    return result
+
+
+# ==================================================
 # Find By Company + Role
-# ==========================================
+# ==================================================
 async def get_job_by_company_and_role(
     user_email: str,
     company_name: str,
@@ -89,16 +112,14 @@ async def get_job_by_company_and_role(
     if not result:
         return None
 
-    result["id"] = str(
-        result.pop("_id")
-    )
+    result["id"] = str(result.pop("_id"))
 
     return result
 
 
-# ==========================================
+# ==================================================
 # Get Single Job
-# ==========================================
+# ==================================================
 async def get_job_details(
     user_email: str,
     job_id: str,
@@ -116,16 +137,14 @@ async def get_job_details(
     if not result:
         return None
 
-    result["id"] = str(
-        result.pop("_id")
-    )
+    result["id"] = str(result.pop("_id"))
 
     return result
 
 
-# ==========================================
+# ==================================================
 # Update Job Status
-# ==========================================
+# ==================================================
 async def update_job_status(
     user_email: str,
     job_id: str,
@@ -154,9 +173,9 @@ async def update_job_status(
     )
 
 
-# ==========================================
+# ==================================================
 # Get All Jobs
-# ==========================================
+# ==================================================
 async def get_jobs(
     user_email: str,
 ):
@@ -175,16 +194,14 @@ async def get_jobs(
 
     for item in result:
 
-        item["id"] = str(
-            item.pop("_id")
-        )
+        item["id"] = str(item.pop("_id"))
 
     return result
 
 
-# ==========================================
+# ==================================================
 # Dashboard Stats
-# ==========================================
+# ==================================================
 async def get_job_stats(
     user_email: str,
 ):
@@ -233,23 +250,43 @@ async def get_job_stats(
         "offer": offer,
     }
 
-async def get_job_by_unique_key(
+
+# ==================================================
+# Gmail Message Tracking
+# ==================================================
+async def is_gmail_message_processed(
     user_email: str,
-    unique_key: str,
+    gmail_id: str,
 ):
 
-    jobs = db.db["job_applications"]
+    collection = db.db["processed_gmail_messages"]
 
-    result = jobs.find_one(
+    result = collection.find_one(
         {
             "user_email": user_email,
-            "unique_key": unique_key,
+            "gmail_id": gmail_id,
         }
     )
 
-    if not result:
-        return None
+    return result is not None
 
-    result["id"] = str(result.pop("_id"))
 
-    return result
+async def save_processed_gmail_message(
+    user_email: str,
+    gmail_id: str,
+):
+
+    collection = db.db["processed_gmail_messages"]
+
+    collection.update_one(
+        {
+            "user_email": user_email,
+            "gmail_id": gmail_id,
+        },
+        {
+            "$set": {
+                "processed_at": datetime.utcnow(),
+            }
+        },
+        upsert=True,
+    )
