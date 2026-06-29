@@ -1,5 +1,7 @@
 from datetime import datetime
+
 from bson import ObjectId
+from bson.errors import InvalidId
 
 from app.common.db import db
 
@@ -45,10 +47,16 @@ async def get_templates(user_email: str):
 
 async def get_template_by_id(template_id: str):
 
+    try:
+        object_id = ObjectId(template_id)
+
+    except InvalidId:
+        return None
+
     templates = db.db["templates"]
 
     result = templates.find_one(
-        {"_id": ObjectId(template_id)}
+        {"_id": object_id}
     )
 
     if not result:
@@ -66,10 +74,16 @@ async def update_template(
     prompt_template: str,
 ):
 
+    try:
+        object_id = ObjectId(template_id)
+
+    except InvalidId:
+        return False
+
     templates = db.db["templates"]
 
     templates.update_one(
-        {"_id": ObjectId(template_id)},
+        {"_id": object_id},
         {
             "$set": {
                 "name": name,
@@ -79,25 +93,46 @@ async def update_template(
         },
     )
 
+    return True
+
 
 async def delete_template(template_id: str):
+
+    try:
+        object_id = ObjectId(template_id)
+
+    except InvalidId:
+        return False
 
     templates = db.db["templates"]
 
     templates.delete_one(
-        {"_id": ObjectId(template_id)}
+        {"_id": object_id}
     )
+
+    return True
+
 
 async def get_template_by_id_and_user(
     template_id: str,
     user_email: str,
 ):
 
+    # Default template IDs like:
+    # meeting_request
+    # work_from_home
+    # are NOT Mongo ObjectIds
+    try:
+        object_id = ObjectId(template_id)
+
+    except InvalidId:
+        return None
+
     templates = db.db["templates"]
 
     result = templates.find_one(
         {
-            "_id": ObjectId(template_id),
+            "_id": object_id,
             "user_email": user_email,
         }
     )

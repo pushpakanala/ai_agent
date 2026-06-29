@@ -35,6 +35,7 @@ from app.email.repositories.email_history_repository import (
 from app.template.repositories.template_repository import (
     get_template_by_id_and_user,
 )
+
 from app.template.data.default_templates import (
     DEFAULT_TEMPLATES,
 )
@@ -69,7 +70,7 @@ async def generate_email_draft(
         "",
     ).strip()
 
-    # Resolve saved contact names
+    # Resolve saved contacts
     if recipient and "@" not in recipient:
 
         contact = await get_contact_by_name(
@@ -94,7 +95,7 @@ async def generate_email_draft(
 
 
 # ==================================================
-# Actually Send Email
+# Send Final Email
 # ==================================================
 @router.post("/send")
 async def send_email(
@@ -169,7 +170,7 @@ async def get_sent_emails(
 
 
 # ==================================================
-# Email History (MongoDB)
+# Email History
 # ==================================================
 @router.get("/history")
 async def history(
@@ -184,7 +185,7 @@ async def history(
 
 
 # ==================================================
-# Natural Language Gmail Search
+# Natural Language Search
 # ==================================================
 @router.post("/search")
 async def search_emails(
@@ -218,7 +219,7 @@ async def search_emails(
 
 
 # ==================================================
-# Generate Template Email (NO SEND)
+# Generate Template Draft (NO SEND)
 # ==================================================
 @router.post("/generate-template")
 async def generate_template_email(
@@ -234,15 +235,24 @@ async def generate_template_email(
             detail="User not found",
         )
 
-    # First check user-created templates
-    template = await get_template_by_id_and_user(
-        req.template_id,
-        email,
-    )
-    
-    # If not found, check built-in templates
+    template = None
+
+    # ------------------------------------------
+    # Try user-created templates only if this
+    # looks like a Mongo ObjectId
+    # ------------------------------------------
+    if len(req.template_id) == 24:
+
+        template = await get_template_by_id_and_user(
+            req.template_id,
+            email,
+        )
+
+    # ------------------------------------------
+    # Otherwise search built-in templates
+    # ------------------------------------------
     if not template:
-    
+
         template = next(
             (
                 t
@@ -251,7 +261,7 @@ async def generate_template_email(
             ),
             None,
         )
-    
+
     if not template:
         raise HTTPException(
             status_code=404,
@@ -287,15 +297,8 @@ async def generate_template_email(
             name=recipient,
         )
 
-        if not contact:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"Contact '{recipient}' not found."
-                ),
-            )
-
-        email_data["to_email"] = contact["email"]
+        if contact:
+            email_data["to_email"] = contact["email"]
 
     return {
         "template": template["name"],
