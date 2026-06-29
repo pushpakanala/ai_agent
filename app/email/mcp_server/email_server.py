@@ -215,11 +215,20 @@ def search_emails(
                 .get(
                     userId="me",
                     id=msg["id"],
+                    format="full",   # IMPORTANT
                 )
                 .execute()
             )
 
-            headers = message["payload"]["headers"]
+            payload = message.get(
+                "payload",
+                {}
+            )
+
+            headers = payload.get(
+                "headers",
+                []
+            )
 
             subject = ""
             sender = ""
@@ -236,12 +245,71 @@ def search_emails(
                 elif h["name"] == "Date":
                     date = h["value"]
 
+            # =====================================
+            # Extract body
+            # =====================================
+            body = ""
+
+            try:
+
+                # Simple emails
+                if payload.get("body", {}).get("data"):
+
+                    body = base64.urlsafe_b64decode(
+                        payload["body"]["data"]
+                    ).decode(
+                        "utf-8",
+                        errors="ignore",
+                    )
+
+                # Multipart emails
+                elif payload.get("parts"):
+
+                    for part in payload["parts"]:
+
+                        if part.get(
+                            "mimeType"
+                        ) == "text/plain":
+
+                            data = (
+                                part.get(
+                                    "body",
+                                    {},
+                                ).get(
+                                    "data"
+                                )
+                            )
+
+                            if data:
+
+                                body = (
+                                    base64.urlsafe_b64decode(
+                                        data
+                                    )
+                                    .decode(
+                                        "utf-8",
+                                        errors="ignore",
+                                    )
+                                )
+
+                                break
+
+            except Exception as e:
+
+                print(
+                    "Body extraction failed:",
+                    e,
+                )
+
+                body = ""
+
             emails.append(
                 {
                     "id": msg["id"],
                     "subject": subject,
                     "from": sender,
                     "date": date,
+                    "body": body,   # NEW
                 }
             )
 

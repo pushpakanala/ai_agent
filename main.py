@@ -17,6 +17,9 @@ from app.email.routers.contact_router import (
 from app.template.routers.template_router import (
     router as template_router,
 )
+from app.jobs.routers.job_router import (
+    router as job_router,
+)
 from contextlib import asynccontextmanager
 import os
 
@@ -56,3 +59,4 @@ app.include_router(google_auth_router)
 app.include_router(email_router)
 app.include_router(contact_router)
 app.include_router(template_router)
+app.include_router(job_router)
