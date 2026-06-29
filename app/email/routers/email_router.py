@@ -35,7 +35,9 @@ from app.email.repositories.email_history_repository import (
 from app.template.repositories.template_repository import (
     get_template_by_id_and_user,
 )
-
+from app.template.data.default_templates import (
+    DEFAULT_TEMPLATES,
+)
 
 router = APIRouter(
     prefix="/email",
@@ -232,11 +234,24 @@ async def generate_template_email(
             detail="User not found",
         )
 
+    # First check user-created templates
     template = await get_template_by_id_and_user(
         req.template_id,
         email,
     )
-
+    
+    # If not found, check built-in templates
+    if not template:
+    
+        template = next(
+            (
+                t
+                for t in DEFAULT_TEMPLATES
+                if t["id"] == req.template_id
+            ),
+            None,
+        )
+    
     if not template:
         raise HTTPException(
             status_code=404,
