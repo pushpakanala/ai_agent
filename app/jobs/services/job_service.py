@@ -204,8 +204,8 @@ async def sync_jobs(
             # ----------------------------------
             # Ignore old emails
             # ----------------------------------
-            # if email_date < started_at:
-            #     continue
+            if email_date < started_at:
+                continue
 
             subject = email_item.get(
                 "subject",
