@@ -14,6 +14,9 @@ from app.email.routers.email_router import (
 from app.email.routers.contact_router import (
     router as contact_router
 )
+from app.template.routers.template_router import (
+    router as template_router,
+)
 from contextlib import asynccontextmanager
 import os
 
@@ -52,3 +55,4 @@ app.add_middleware(
 app.include_router(google_auth_router)
 app.include_router(email_router)
 app.include_router(contact_router)
+app.include_router(template_router)

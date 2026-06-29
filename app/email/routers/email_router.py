@@ -26,6 +26,13 @@ from app.email.repositories.email_history_repository import (
     get_email_history,
 )
 
+from app.email.models.send_template_request import (
+    SendTemplateRequest,
+)
+
+from app.template.repositories.template_repository import (
+    get_template_by_id_and_user,
+)
 
 router = APIRouter(
     prefix="/email",
@@ -187,4 +194,108 @@ async def search_emails(
         "original_query": req.query,
         "gmail_query": gmail_query,
         "results": result,
+    }
+
+@router.post("/send-template")
+async def send_template_email(
+    req: SendTemplateRequest,
+    email: str = Depends(get_current_user),
+):
+
+    # Get logged-in user
+    user = await get_user(email)
+
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found",
+        )
+
+    # Get template
+    template = await get_template_by_id_and_user(
+        req.template_id,
+        email,
+    )
+
+    if not template:
+        raise HTTPException(
+            status_code=404,
+            detail="Template not found",
+        )
+
+    # Replace variables
+    try:
+
+        final_prompt = template[
+            "prompt_template"
+        ].format(**req.variables)
+
+    except KeyError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing variable: {e.args[0]}",
+        )
+
+    # Generate email
+    email_data = generate_email(
+        final_prompt
+    )
+
+    # Resolve contacts
+    recipient = email_data.get(
+        "to_email",
+        "",
+    ).strip()
+
+    if "@" not in recipient and recipient:
+
+        contact = await get_contact_by_name(
+            user_email=email,
+            name=recipient,
+        )
+
+        if not contact:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Contact '{recipient}' "
+                    "not found."
+                ),
+            )
+
+        email_data["to_email"] = contact["email"]
+
+    # Send email
+    result = await send_email_via_mcp(
+        access_token=user["access_token"],
+        refresh_token=user["refresh_token"],
+        to_email=email_data["to_email"],
+        subject=email_data["subject"],
+        body=email_data["body"],
+    )
+
+    gmail_message_id = ""
+
+    if isinstance(result, dict):
+        gmail_message_id = result.get(
+            "id",
+            "",
+        )
+
+    # Save history
+    await save_email_history(
+        user_email=email,
+        prompt=final_prompt,
+        to_email=email_data["to_email"],
+        subject=email_data["subject"],
+        body=email_data["body"],
+        gmail_message_id=gmail_message_id,
+    )
+
+    return {
+        "template": template["name"],
+        "final_prompt": final_prompt,
+        "generated_email": email_data,
+        "mcp_response": result,
     }
