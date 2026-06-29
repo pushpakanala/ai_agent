@@ -14,95 +14,29 @@ async def fetch_recent_job_emails(
     last_synced_at: datetime | None = None,
 ):
 
-    # --------------------------------------
-    # Build Gmail query
-    # --------------------------------------
-    if last_synced_at:
+    # Fetch the last 7 days.
+    # Duplicate prevention happens via gmail_id storage.
+    query = """
+    newer_than:7d
+    (
+        application
+        OR interview
+        OR recruiter
+        OR hiring
+        OR offer
+        OR rejection
+    )
+    """
 
-        diff_seconds = (
-            datetime.utcnow() - last_synced_at
-        ).total_seconds()
-
-        hours = max(
-            int(diff_seconds / 3600),
-            1,
-        )
-
-        query = f"""
-        newer_than:{hours}h
-        (
-            application
-            OR interview
-            OR recruiter
-            OR hiring
-            OR offer
-            OR rejection
-        )
-        """
-
-        print(
-            f"\nIncremental sync ({hours}h)"
-        )
-
-    else:
-
-        # ----------------------------------
-        # First-time users:
-        # Only start tracking from now.
-        # ----------------------------------
-        query = """
-        newer_than:1h
-        (
-            application
-            OR interview
-            OR recruiter
-            OR hiring
-            OR offer
-            OR rejection
-        )
-        """
-
-        print(
-            "\nFirst sync (1 hour window)"
-        )
-
-    print("\nGMAIL QUERY:")
-    print(query)
-
-    # --------------------------------------
-    # Call MCP
-    # --------------------------------------
     results = await search_emails_via_mcp(
         access_token=access_token,
         refresh_token=refresh_token,
         query=query,
     )
 
-    if not results:
-
-        print("\nNo emails found.")
-
-        return []
-
-    print(
-        f"\nRaw MCP results: {len(results)} emails"
-    )
-
-    # --------------------------------------
-    # Normalize
-    # --------------------------------------
     normalized = []
 
     for item in results:
-
-        if not isinstance(item, dict):
-
-            print(
-                "Skipping invalid item:",
-                item,
-            )
-
-            continue
 
         normalized.append(
             {
@@ -134,7 +68,7 @@ async def fetch_recent_job_emails(
         )
 
     print(
-        f"\nNormalized {len(normalized)} emails"
+        f"\nFound {len(normalized)} emails"
     )
 
     return normalized

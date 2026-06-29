@@ -10,6 +10,7 @@ from app.jobs.repositories.job_repository import (
     get_job_by_company_and_role,
     is_gmail_message_processed,      # NEW
     save_processed_gmail_message,    # NEW
+    get_job_by_gmail_id
 )
 
 from app.jobs.services.gmail_job_service import (
@@ -30,6 +31,7 @@ from app.auth.repositories.user_repository import (
 # ==================================================
 async def process_job_email(
     user_email: str,
+    gmail_id: str,
     job_data: dict,
     email_date: datetime,
 ):
@@ -102,6 +104,7 @@ async def process_job_email(
     # --------------------------------------
     await create_job(
         user_email=user_email,
+        gmail_id=gmail_id,
         job_id=job_id,
         company_name=company_name,
         role=role,
@@ -121,7 +124,6 @@ async def sync_jobs(user_email: str):
     user = await get_user(user_email)
 
     if not user:
-
         return {
             "message": "User not found"
         }
@@ -130,6 +132,18 @@ async def sync_jobs(user_email: str):
         access_token=user["access_token"],
         refresh_token=user["refresh_token"],
         last_synced_at=user.get("last_job_sync_at"),
+    )
+
+    # --------------------------------------
+    # Process oldest → newest
+    # --------------------------------------
+    emails = sorted(
+        emails,
+        key=lambda x: parsedate_to_datetime(
+            x["date"]
+            .replace("(UTC)", "")
+            .strip()
+        )
     )
 
     print(f"\nFound {len(emails)} emails")
@@ -164,10 +178,11 @@ async def sync_jobs(user_email: str):
                         f"Skipping Gmail ID: {gmail_id}"
                     )
 
+                    skipped += 1
                     continue
 
             # --------------------------------------
-            # Parse date
+            # Parse email date
             # --------------------------------------
             raw_date = (
                 email_item.get("date", "")
@@ -193,6 +208,9 @@ async def sync_jobs(user_email: str):
                     .replace(tzinfo=None)
                 )
 
+            # --------------------------------------
+            # Classification
+            # --------------------------------------
             subject = email_item.get(
                 "subject",
                 "",
@@ -236,8 +254,12 @@ async def sync_jobs(user_email: str):
 
             processed += 1
 
+            # --------------------------------------
+            # Create / Update Job
+            # --------------------------------------
             result = await process_job_email(
                 user_email=user_email,
+                gmail_id=gmail_id,      # NEW
                 job_data=classification,
                 email_date=email_date,
             )

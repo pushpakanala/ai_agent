@@ -8,6 +8,7 @@ from app.common.db import db
 # ==================================================
 async def create_job(
     user_email: str,
+    gmail_id: str,
     job_id: str | None,
     unique_key: str,
     company_name: str,
@@ -21,6 +22,7 @@ async def create_job(
     result = jobs.insert_one(
         {
             "user_email": user_email,
+            "gmail_id": gmail_id,
             "job_id": job_id,
             "unique_key": unique_key,
             "company_name": company_name,
@@ -290,3 +292,27 @@ async def save_processed_gmail_message(
         },
         upsert=True,
     )
+
+# ==========================================
+# Find By Gmail ID
+# ==========================================
+async def get_job_by_gmail_id(
+    user_email: str,
+    gmail_id: str,
+):
+
+    jobs = db.db["job_applications"]
+
+    result = jobs.find_one(
+        {
+            "user_email": user_email,
+            "gmail_id": gmail_id,
+        }
+    )
+
+    if not result:
+        return None
+
+    result["id"] = str(result.pop("_id"))
+
+    return result
