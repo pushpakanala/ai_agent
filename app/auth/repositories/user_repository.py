@@ -66,15 +66,37 @@ async def initialize_job_tracking(
     updates = {}
 
     # --------------------------------------
-    # First time job tracking
+    # First time tracking timestamp
     # --------------------------------------
     if not user.get(
         "job_tracking_started_at"
     ):
 
+        updates[
+            "job_tracking_started_at"
+        ] = now
+
+    # --------------------------------------
+    # First sync timestamp
+    # --------------------------------------
+    if not user.get(
+        "last_job_sync_at"
+    ):
+
+        updates[
+            "last_job_sync_at"
+        ] = now
+
+    # --------------------------------------
+    # Start Gmail watch if missing
+    # (handles both new and old users)
+    # --------------------------------------
+    if not user.get(
+        "gmail_history_id"
+    ):
+
         try:
 
-            # Start Gmail Push Notifications
             watch_response = await start_gmail_watch(
                 access_token=user[
                     "access_token"
@@ -92,7 +114,6 @@ async def initialize_job_tracking(
                 f"Watch response: {watch_response}"
             )
 
-            # Store Gmail history ID
             if watch_response.get(
                 "historyId"
             ):
@@ -105,26 +126,23 @@ async def initialize_job_tracking(
                     ]
                 )
 
+            if watch_response.get(
+                "expiration"
+            ):
+
+                updates[
+                    "gmail_watch_expiration"
+                ] = int(
+                    watch_response[
+                        "expiration"
+                    ]
+                )
+
         except Exception as e:
 
             print(
                 f"Failed to start Gmail watch: {e}"
             )
-
-        updates[
-            "job_tracking_started_at"
-        ] = now
-
-    # --------------------------------------
-    # First sync timestamp
-    # --------------------------------------
-    if not user.get(
-        "last_job_sync_at"
-    ):
-
-        updates[
-            "last_job_sync_at"
-        ] = now
 
     # --------------------------------------
     # Save updates
