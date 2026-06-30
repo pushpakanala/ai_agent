@@ -61,132 +61,36 @@ async def initialize_job_tracking(
     if not user:
         return None
 
+    # Already initialized
+    if user.get("job_tracking_started_at"):
+        return user
+
     now = datetime.utcnow()
 
-    updates = {}
-
-    print("\n===== INIT JOB TRACKING =====")
-    print(f"User: {email}")
-    print(
-        "Existing history id:",
-        user.get("gmail_history_id"),
-    )
-    print("=============================\n")
-
-    # --------------------------------------
-    # First time tracking timestamp
-    # --------------------------------------
-    if not user.get(
-        "job_tracking_started_at"
-    ):
-
-        updates[
-            "job_tracking_started_at"
-        ] = now
-
-    # --------------------------------------
-    # First sync timestamp
-    # --------------------------------------
-    if not user.get(
-        "last_job_sync_at"
-    ):
-
-        updates[
-            "last_job_sync_at"
-        ] = now
-
-    # --------------------------------------
-    # Start Gmail watch if missing
-    # (works for both old and new users)
-    # --------------------------------------
-    if not user.get(
-        "gmail_history_id"
-    ):
-
-        print(
-            f"Starting Gmail watch for {email}"
-        )
-
-        try:
-
-            watch_response = await start_gmail_watch(
-                access_token=user[
-                    "access_token"
-                ],
-                refresh_token=user[
-                    "refresh_token"
-                ],
-            )
-
-            print(
-                "Watch response:",
-                watch_response,
-            )
-
-            history_id = watch_response.get(
-                "historyId"
-            )
-
-            expiration = watch_response.get(
-                "expiration"
-            )
-
-            if history_id:
-
-                updates[
-                    "gmail_history_id"
-                ] = str(history_id)
-
-            if expiration:
-
-                updates[
-                    "gmail_watch_expiration"
-                ] = int(expiration)
-
-        except Exception as e:
-
-            print(
-                f"Failed to start Gmail watch: {e}"
-            )
-
-    else:
-
-        print(
-            f"Gmail watch already exists for {email}"
-        )
-
-    # --------------------------------------
-    # Save updates
-    # --------------------------------------
-    print(
-        "Mongo updates:",
-        updates,
+    watch_response = await start_gmail_watch(
+        access_token=user["access_token"],
+        refresh_token=user["refresh_token"],
     )
 
-    if updates:
+    updates = {
+        "job_tracking_started_at": now,
+        "last_job_sync_at": now,
+        "gmail_history_id": str(
+            watch_response["historyId"]
+        ),
+        "gmail_watch_expiration": int(
+            watch_response["expiration"]
+        ),
+    }
 
-        users.update_one(
-            {"email": email},
-            {
-                "$set": updates
-            },
-        )
+    users.update_one(
+        {"email": email},
+        {"$set": updates},
+    )
 
-        user = users.find_one(
-            {"email": email}
-        )
-
-        print(
-            "User updated successfully"
-        )
-
-    else:
-
-        print(
-            "Nothing to update"
-        )
-
-    return user
+    return users.find_one(
+        {"email": email}
+    )
 
 # ==================================================
 # Update Last Job Sync Time
