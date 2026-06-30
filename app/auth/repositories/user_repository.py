@@ -48,6 +48,13 @@ async def get_user(
 # ==================================================
 # Initialize Job Tracking
 # ==================================================
+from datetime import datetime
+
+from app.jobs.services.gmail_watch_service import (
+    start_gmail_watch,
+)
+
+
 async def initialize_job_tracking(
     email: str,
 ):
@@ -61,31 +68,95 @@ async def initialize_job_tracking(
     if not user:
         return None
 
+    # --------------------------------------
     # Already initialized
-    if user.get("job_tracking_started_at"):
+    # --------------------------------------
+    if user.get(
+        "job_tracking_started_at"
+    ):
+
         return user
 
     now = datetime.utcnow()
 
-    watch_response = await start_gmail_watch(
-        access_token=user["access_token"],
-        refresh_token=user["refresh_token"],
+    # --------------------------------------
+    # Start Gmail watch
+    # --------------------------------------
+    try:
+
+        watch_response = await start_gmail_watch(
+            access_token=user[
+                "access_token"
+            ],
+            refresh_token=user[
+                "refresh_token"
+            ],
+        )
+
+        print(
+            "\nWATCH RESPONSE:"
+        )
+
+        print(watch_response)
+
+    except Exception as e:
+
+        print(
+            f"Failed to start Gmail watch: {e}"
+        )
+
+        raise Exception(
+            f"Gmail watch failed: {e}"
+        )
+
+    # --------------------------------------
+    # Validate response
+    # --------------------------------------
+    history_id = watch_response.get(
+        "historyId"
     )
 
+    expiration = watch_response.get(
+        "expiration"
+    )
+
+    if not history_id:
+
+        raise Exception(
+            f"Invalid watch response: {watch_response}"
+        )
+
+    # --------------------------------------
+    # Prepare updates
+    # --------------------------------------
     updates = {
         "job_tracking_started_at": now,
         "last_job_sync_at": now,
         "gmail_history_id": str(
-            watch_response["historyId"]
-        ),
-        "gmail_watch_expiration": int(
-            watch_response["expiration"]
+            history_id
         ),
     }
 
+    if expiration:
+
+        updates[
+            "gmail_watch_expiration"
+        ] = int(expiration)
+
+    print(
+        "\nMONGO UPDATES:"
+    )
+
+    print(updates)
+
+    # --------------------------------------
+    # Save to MongoDB
+    # --------------------------------------
     users.update_one(
         {"email": email},
-        {"$set": updates},
+        {
+            "$set": updates
+        },
     )
 
     return users.find_one(
