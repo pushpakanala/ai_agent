@@ -1,5 +1,7 @@
 from datetime import datetime
-
+from app.jobs.services.gmail_watch_service import (
+    start_gmail_watch,
+)
 from app.common.db import db
 
 
@@ -70,6 +72,45 @@ async def initialize_job_tracking(
         "job_tracking_started_at"
     ):
 
+        try:
+
+            # Start Gmail Push Notifications
+            watch_response = await start_gmail_watch(
+                access_token=user[
+                    "access_token"
+                ],
+                refresh_token=user[
+                    "refresh_token"
+                ],
+            )
+
+            print(
+                f"Gmail watch started for {email}"
+            )
+
+            print(
+                f"Watch response: {watch_response}"
+            )
+
+            # Store Gmail history ID
+            if watch_response.get(
+                "historyId"
+            ):
+
+                updates[
+                    "gmail_history_id"
+                ] = str(
+                    watch_response[
+                        "historyId"
+                    ]
+                )
+
+        except Exception as e:
+
+            print(
+                f"Failed to start Gmail watch: {e}"
+            )
+
         updates[
             "job_tracking_started_at"
         ] = now
@@ -85,6 +126,9 @@ async def initialize_job_tracking(
             "last_job_sync_at"
         ] = now
 
+    # --------------------------------------
+    # Save updates
+    # --------------------------------------
     if updates:
 
         users.update_one(
@@ -99,7 +143,6 @@ async def initialize_job_tracking(
         )
 
     return user
-
 
 # ==================================================
 # Update Last Job Sync Time
@@ -143,6 +186,23 @@ async def reset_job_tracking(
                 "job_tracking_started_at": now,
                 "last_job_sync_at": now,
                 "updated_at": now,
+            }
+        },
+    )
+
+async def update_gmail_history_id(
+    email: str,
+    history_id: str,
+):
+
+    users = db.db["users"]
+
+    users.update_one(
+        {"email": email},
+        {
+            "$set": {
+                "gmail_history_id":
+                    history_id
             }
         },
     )
