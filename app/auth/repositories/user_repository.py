@@ -65,6 +65,14 @@ async def initialize_job_tracking(
 
     updates = {}
 
+    print("\n===== INIT JOB TRACKING =====")
+    print(f"User: {email}")
+    print(
+        "Existing history id:",
+        user.get("gmail_history_id"),
+    )
+    print("=============================\n")
+
     # --------------------------------------
     # First time tracking timestamp
     # --------------------------------------
@@ -89,11 +97,15 @@ async def initialize_job_tracking(
 
     # --------------------------------------
     # Start Gmail watch if missing
-    # (handles both new and old users)
+    # (works for both old and new users)
     # --------------------------------------
     if not user.get(
         "gmail_history_id"
     ):
+
+        print(
+            f"Starting Gmail watch for {email}"
+        )
 
         try:
 
@@ -107,36 +119,29 @@ async def initialize_job_tracking(
             )
 
             print(
-                f"Gmail watch started for {email}"
+                "Watch response:",
+                watch_response,
             )
 
-            print(
-                f"Watch response: {watch_response}"
-            )
-
-            if watch_response.get(
+            history_id = watch_response.get(
                 "historyId"
-            ):
+            )
+
+            expiration = watch_response.get(
+                "expiration"
+            )
+
+            if history_id:
 
                 updates[
                     "gmail_history_id"
-                ] = str(
-                    watch_response[
-                        "historyId"
-                    ]
-                )
+                ] = str(history_id)
 
-            if watch_response.get(
-                "expiration"
-            ):
+            if expiration:
 
                 updates[
                     "gmail_watch_expiration"
-                ] = int(
-                    watch_response[
-                        "expiration"
-                    ]
-                )
+                ] = int(expiration)
 
         except Exception as e:
 
@@ -144,9 +149,20 @@ async def initialize_job_tracking(
                 f"Failed to start Gmail watch: {e}"
             )
 
+    else:
+
+        print(
+            f"Gmail watch already exists for {email}"
+        )
+
     # --------------------------------------
     # Save updates
     # --------------------------------------
+    print(
+        "Mongo updates:",
+        updates,
+    )
+
     if updates:
 
         users.update_one(
@@ -158,6 +174,16 @@ async def initialize_job_tracking(
 
         user = users.find_one(
             {"email": email}
+        )
+
+        print(
+            "User updated successfully"
+        )
+
+    else:
+
+        print(
+            "Nothing to update"
         )
 
     return user
