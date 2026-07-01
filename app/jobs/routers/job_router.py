@@ -20,6 +20,9 @@ from app.jobs.repositories.job_repository import (
 from app.jobs.services.job_service import (
     sync_jobs,
 )
+from app.jobs.services.watch_renewal_service import (
+    renew_expiring_watches,
+)
 
 
 router = APIRouter(
@@ -97,3 +100,13 @@ async def sync_job_emails(
     )
 
     return result
+
+@router.post("/renew-watches")
+async def renew_watches():
+
+    await renew_expiring_watches()
+
+    return {
+        "message":
+        "Watch renewal completed"
+    }
