@@ -163,12 +163,18 @@ def calculate_quality_score(resume_text: str) -> dict:
     overall_score = section_score + action_score + metric_score
 
     return {
-        "score_type":      "quality",
-        "overall_score":   overall_score,
-        "section_score":   section_score,
-        "action_score":    action_score,
-        "metric_score":    metric_score,
-        "recommendations": recommendations,
+        "score_type":       "quality",
+        "overall_score":    overall_score,
+        # Sub-scores — same field names as calculate_ats_match so
+        # the frontend uses identical rendering logic for both.
+        "keyword_score":    None,   # no JD available — frontend shows "–" not NaN
+        "section_score":    section_score,
+        "action_score":     action_score,
+        "metric_score":     metric_score,
+        "matched_phrases":  [],
+        "matched_keywords": [],
+        "missing_keywords": [],
+        "recommendations":  recommendations,
     }
 
 
@@ -177,15 +183,19 @@ def calculate_quality_score(resume_text: str) -> dict:
 def calculate_ats_match(resume_text: str, job_description: str) -> dict:
     """
     Measures how well this resume matches a specific job description.
-    Uses EXACTLY the same algorithm as job_match_service.calculate_match()
-    so the score here and the score from /job-match are always consistent —
-    no more "100 after optimize, 60 after re-match" confusion.
+    Uses the same keyword-overlap algorithm as job_match_service.calculate_match()
+    so scores are consistent — no more "100 after optimize, 60 after re-match".
 
-    Scoring: phrases worth 2×, single words worth 1×, capped at 100.
+    Also runs the structural breakdown (sections, verbs, metrics) so the
+    frontend always receives all four sub-score fields and never shows NaN.
+
+    overall_score = weighted blend:
+      60% keyword match (JD relevance — the most important signal)
+      40% structural quality (sections, verbs, metrics)
 
     Label in UI: "ATS Match Score"
-    Show on: after /optimize-for-job. Compare with /job-match score.
     """
+    # ── Keyword match (60% weight) ────────────────────────────────────────
     resume_bigrams, resume_words = _extract_terms(resume_text)
     jd_bigrams,    jd_words      = _extract_terms(job_description)
 
@@ -196,23 +206,57 @@ def calculate_ats_match(resume_text: str, job_description: str) -> dict:
 
     total_jd_terms  = len(jd_bigrams) * 2 + len(jd_words)
     matched_weight  = len(matched_phrases) * 2 + len(matched_words)
-    match_score     = min(100, int(matched_weight / max(total_jd_terms, 1) * 100))
+    keyword_score   = min(100, int(matched_weight / max(total_jd_terms, 1) * 100))
 
     top_missing = sorted(missing_phrases)[:10] + sorted(missing_words)[:10]
 
+    # ── Structural quality (40% weight) — same as calculate_quality_score ─
+    text = resume_text.lower()
+
+    section_score = sum(
+        10 for variants in SECTION_VARIANTS.values()
+        if any(v in text for v in variants)
+    )
+
+    action_count  = _count_action_verbs(text)
+    action_score  = min(30, action_count * 2)
+
+    metrics_found = _count_metrics(resume_text)
+    metric_score  = min(30, metrics_found * 3)
+
+    quality_score = section_score + action_score + metric_score   # 0–100
+
+    # ── Blended overall score ─────────────────────────────────────────────
+    overall_score = min(100, int(keyword_score * 0.6 + quality_score * 0.4))
+
+    # ── Recommendations ───────────────────────────────────────────────────
     recommendations: list[str] = []
-    if match_score < 50:
+    if keyword_score < 50:
         recommendations.append(
             "Keyword match is low — incorporate more terms from the job description naturally."
         )
-    if match_score < 75:
+    if keyword_score < 75:
         recommendations.append(
             "Focus on matching the specific tools and technologies mentioned in the JD."
+        )
+    if action_score < 12:
+        recommendations.append(
+            "Use stronger action verbs: built, engineered, launched, optimized, scaled."
+        )
+    if metric_score < 12:
+        recommendations.append(
+            "Quantify your impact — add percentages, dollar values, or scale numbers."
         )
 
     return {
         "score_type":       "ats_match",
-        "overall_score":    match_score,
+        "overall_score":    overall_score,
+        # Sub-scores the frontend displays in the four breakdown bars
+        "keyword_score":    keyword_score,
+        "section_score":    section_score,
+        "action_score":     action_score,
+        "metric_score":     metric_score,
+        # Keyword details
         "matched_phrases":  sorted(matched_phrases)[:20],
         "matched_keywords": sorted(matched_words)[:30],
         "missing_keywords": top_missing[:20],
