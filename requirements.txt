@@ -17,3 +17,5 @@ pillow
 pytesseract
 reportlab
 anthropic
+faiss
+
