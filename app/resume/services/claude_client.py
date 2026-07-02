@@ -1,32 +1,20 @@
 """
 claude_client.py
 -----------------
-Shared Anthropic (Claude) client + a structured-generation helper used by
-every resume service that needs the model to produce a ResumeData-shaped
-JSON object.
+Shared Anthropic client + structured-generation helper constrained to
+ResumeData via forced tool use.
 
-WHY THIS REPLACES THE OLD PATTERN
------------------------------------
-The old services called OpenAI with either no response_format at all, or
-response_format={"type": "json_object"} — both just ASK the model to
-produce JSON matching a schema described in the prompt text. Nothing
-enforces it, which is why every upload/edit produced a slightly different
-shape (period vs completion_date vs duration, tasks vs details vs
-responsibilities, etc.) and downstream rendering kept breaking.
+BUG FIX: The retry loop was appending a plain-string user message after an
+assistant message that contained a `tool_use` block. The Anthropic API
+requires that every `tool_use` block is immediately followed by a user
+message containing a matching `tool_result` block — a plain string causes:
 
-This module instead:
-1. Gives Claude exactly one tool, `emit_resume`, whose input_schema is
-   generated directly FROM app.resume.models.resume_schema.ResumeData —
-   so the schema Claude is constrained to and the schema we validate
-   against can never drift apart.
-2. Forces the tool call via `tool_choice`, so Claude can't reply with
-   prose or a differently-shaped JSON blob.
-3. Validates the tool call's arguments with Pydantic before trusting them.
-   If validation ever fails, the exact error is fed back to Claude and it's
-   asked to correct itself, up to MAX_RETRIES times.
+  400 BadRequestError: `tool_use` ids were found without `tool_result`
+  blocks immediately after: toolu_01...
 
-Nothing is returned to the caller (and therefore nothing is saved to
-Mongo) until it passes validation.
+Fix: on each retry, the user message now wraps the correction text inside
+a proper `tool_result` content block with the matching tool_use_id, which
+satisfies the API's turn structure requirement.
 """
 
 from anthropic import AsyncAnthropic
@@ -35,9 +23,7 @@ from pydantic import ValidationError
 from app.common.config import CLAUDE_API_KEY
 from app.resume.models.resume_schema import ResumeData
 
-# Check your Anthropic account for the exact model string you want to use.
-MODEL = "claude-sonnet-5"
-
+MODEL      = "claude-sonnet-4-5"
 MAX_TOKENS = 8192
 MAX_RETRIES = 2
 
@@ -62,13 +48,11 @@ async def generate_resume_json(
     user_content: str,
 ) -> dict:
     """
-    Calls Claude with a forced tool call so the response is constrained to
-    ResumeData's exact shape, then validates it with Pydantic. Retries with
-    the validation error fed back to the model if needed.
+    Calls Claude with a forced tool call constrained to ResumeData's exact
+    shape, validates with Pydantic, and retries on validation failure.
 
-    Returns a plain dict matching ResumeData, ready to store as
-    optimized_resume_json. Raises ValueError if Claude can't produce valid
-    output within MAX_RETRIES + 1 attempts.
+    FIX: retry messages now include a tool_result block (required by the
+    Anthropic API after any assistant message that contains tool_use).
     """
     tool = {
         "name": "emit_resume",
@@ -110,19 +94,32 @@ async def generate_resume_json(
             if attempt >= MAX_RETRIES:
                 break
 
-            messages.append({"role": "assistant", "content": response.content})
+            # FIX: append the assistant turn (which contains tool_use),
+            # then a user turn with a tool_result block whose tool_use_id
+            # matches the tool_use block. Without this matching tool_result
+            # the API returns 400: "tool_use ids found without tool_result".
+            messages.append({
+                "role": "assistant",
+                "content": response.content,   # contains the tool_use block
+            })
             messages.append({
                 "role": "user",
-                "content": (
-                    "Your last response didn't match the required schema. "
-                    f"Validation errors:\n{last_error}\n\n"
-                    "Please call emit_resume again with corrected data that "
-                    "resolves these errors exactly."
-                ),
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_block.id,   # must match exactly
+                        "content": (
+                            f"Validation failed. Errors:\n{last_error}\n\n"
+                            "Please call emit_resume again with corrected data "
+                            "that resolves every error listed above."
+                        ),
+                    }
+                ],
             })
 
     raise ValueError(
-        f"Failed to generate a schema-valid resume after {MAX_RETRIES + 1} attempt(s): {last_error}"
+        f"Failed to generate a schema-valid resume after "
+        f"{MAX_RETRIES + 1} attempt(s): {last_error}"
     )
 
 
@@ -132,7 +129,7 @@ async def generate_text(
     max_tokens: int = 600,
     temperature: float = 0.4,
 ) -> str:
-    """Plain text generation (e.g. cover letters) — no tool use needed."""
+    """Plain text generation (cover letters etc.) — no tool use needed."""
     response = await client.messages.create(
         model=MODEL,
         max_tokens=max_tokens,
