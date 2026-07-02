@@ -16,7 +16,7 @@ join their stripped run texts. This correctly extracts:
   • Following rows: bullet points stored as paragraphs in the cell
 """
 
-import fitz
+import pymupdf as fitz  # PyMuPDF — do NOT use `pip install fitz` (wrong package)
 from io import BytesIO
 from docx import Document
 from docx.table import Table

@@ -11,8 +11,7 @@ itsdangerous
 httpx
 pymongo
 fastmcp
-fitz
-pymupdf
+PyMuPDF
 python-docx
 pillow
 pytesseract
