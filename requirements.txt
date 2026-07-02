@@ -11,3 +11,10 @@ itsdangerous
 httpx
 pymongo
 fastmcp
+fitz
+pymupdf
+python-docx
+pillow
+pytesseract
+reportlab
+anthropic

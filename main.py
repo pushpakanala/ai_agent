@@ -23,6 +23,7 @@ from app.jobs.routers.job_router import (
 from app.users.routes import (
     router as users_router,
 )
+from app.resume.routes import router as resume_router
 from app.jobs.routers.gmail_webhook_router import router as gmail_router
 from contextlib import asynccontextmanager
 import os
@@ -73,4 +74,9 @@ app.include_router(
     users_router,
     prefix="/users",
     tags=["Users"],
+)
+app.include_router(
+    resume_router,
+    prefix="/resume",
+    tags=["Resume"],
 )

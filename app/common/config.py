@@ -49,3 +49,5 @@ FRONTEND_URL = os.getenv("FRONTEND_URL")
 GMAIL_PUBSUB_TOPIC = os.getenv(
     "GMAIL_PUBSUB_TOPIC"
 )
+
+CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
