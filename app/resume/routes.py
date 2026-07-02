@@ -135,17 +135,15 @@ async def upload_resume(
     metadata    = await extract_resume_metadata(text)
     resume_json = await structure_resume(text)
 
-    # Quality score only — no JD available at upload time.
-    # UI should label this "Resume Quality Score", not "ATS Score".
-    quality = calculate_quality_score(text)
-
+    # No score on upload — a score without a JD is meaningless.
+    # The user gets a real ATS match score after /job-match or /optimize-for-job.
     resume_id = await create_resume(
         user_email=current_user,
         title=file.filename,
         text=text,
         metadata=metadata,
         resume_json=resume_json,
-        ats_score=quality["overall_score"],
+        ats_score=None,
     )
 
     return {
@@ -153,8 +151,8 @@ async def upload_resume(
         "candidate_name": metadata.get("candidate_name"),
         "version":        1,
         "resume_preview": resume_json,
-        "quality_score":  quality,   # renamed from ats_score — no JD context yet
-        "message":        "Resume uploaded and scored successfully.",
+        "ats_score":      None,
+        "message":        "Resume uploaded successfully.",
     }
 
 
@@ -208,9 +206,10 @@ async def chat_with_resume(
             "message":        "Analysis complete.",
         }
 
-    # EDIT — quality score only (no JD in chat context)
+    # EDIT — no score recalculated after chat edits.
+    # ATS score is only meaningful against a specific JD.
+    # The version history stores null for ats_score on chat edits.
     updated_json, updated_text = await modify_resume(current_json, payload.message)
-    quality      = calculate_quality_score(updated_text)
     next_version = latest["version"] + 1
 
     db.db["resume_versions"].insert_one({
@@ -219,7 +218,7 @@ async def chat_with_resume(
         "change_reason":         payload.message,
         "optimized_text":        updated_text,
         "optimized_resume_json": updated_json,
-        "ats_score":             quality["overall_score"],
+        "ats_score":             None,
         "created_at":            datetime.utcnow(),
     })
 
@@ -229,12 +228,12 @@ async def chat_with_resume(
     )
 
     return {
-        "intent":        "edit",
-        "version":       next_version,
-        "resume":        updated_json,
-        "updated_text":  updated_text,
-        "quality_score": quality,   # structural quality — no JD
-        "message":       "Resume updated successfully.",
+        "intent":       "edit",
+        "version":      next_version,
+        "resume":       updated_json,
+        "updated_text": updated_text,
+        "ats_score":    None,
+        "message":      "Resume updated successfully.",
     }
 
 
