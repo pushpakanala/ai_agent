@@ -3,22 +3,22 @@ routes.py
 ---------
 FastAPI router for the Resume Optimizer module.
 
-All endpoints:
-  1.  GET    /                          — list all resumes
-  2.  POST   /upload                    — upload a resume (PDF or DOCX)
-  3.  POST   /{resume_id}/chat          — smart chat: auto-routes to edit / analyze / off-topic
-  4.  GET    /{resume_id}/versions      — version history
-  5.  GET    /{resume_id}/preview       — preview latest version
-  6.  GET    /{resume_id}/preview/{v}   — preview specific version
-  7.  POST   /{resume_id}/restore/{v}   — restore an older version
-  8.  DELETE /{resume_id}               — delete resume and all versions
-  9.  GET    /{resume_id}/download/docx — download as Word
-  10. GET    /{resume_id}/download/pdf  — download as PDF
-  11. GET    /{resume_id}/ats-score     — get ATS score for latest version
-  12. POST   /{resume_id}/job-match     — score resume vs job description
-  13. POST   /{resume_id}/optimize-for-job — full JD-targeted rewrite
-  14. POST   /{resume_id}/cover-letter  — generate tailored cover letter
-  15. POST   /{resume_id}/analyze       — analysis/critique (no version saved)
+ATS SCORING STRATEGY (important — read before changing):
+
+  calculate_quality_score(text)
+    → Sections + action verbs + metrics. No JD. Honest structural quality.
+    → Used by: /upload, /chat (edit intent), /ats-score
+    → UI label: "Resume Quality Score"
+
+  calculate_ats_match(text, jd)
+    → Keyword overlap with JD. SAME algorithm as /job-match so numbers agree.
+    → Used by: /optimize-for-job only
+    → UI label: "ATS Match Score"
+
+  /job-match uses calculate_match() from job_match_service (unchanged).
+  /optimize-for-job uses calculate_ats_match() which is the same algorithm,
+  so the score before optimization (from /job-match) and after (from
+  /optimize-for-job) are directly comparable — no more 100 → 60 confusion.
 """
 
 from datetime import datetime
@@ -33,7 +33,10 @@ from app.auth.dependencies import get_current_user
 from app.common.db import db
 
 from app.resume.services.analyze_service import analyze_resume
-from app.resume.services.ats_service import calculate_ats_score
+from app.resume.services.ats_service import (
+    calculate_quality_score,
+    calculate_ats_match,
+)
 from app.resume.services.chat_service import modify_resume
 from app.resume.services.cover_letter_service import generate_cover_letter
 from app.resume.services.docx_service import generate_docx_bytes
@@ -43,7 +46,6 @@ from app.resume.services.job_optimizer_service import optimize_for_job
 from app.resume.services.metadata_service import extract_resume_metadata
 from app.resume.services.parser_service import extract_resume_text
 from app.resume.services.pdf_service import generate_pdf_bytes
-from app.resume.services.resume_renderer import render_resume_text
 from app.resume.services.structure_service import structure_resume
 from app.resume.services.validator_service import validate_resume_file, validate_resume_text
 from app.resume.services.version_service import create_resume
@@ -68,20 +70,9 @@ class JobOptimizationRequest(BaseModel):
 class CoverLetterRequest(BaseModel):
     job_description: str
     company_name: Optional[str] = ""
-    tone: Optional[str] = "professional"   # professional | enthusiastic | concise
+    tone: Optional[str] = "professional"
 
 
-class ResumeAnalyzeRequest(BaseModel):
-    mode: Literal[
-        "recruiter_scan",
-        "deep_critique",
-        "bullet_audit",
-        "positioning",
-        "final_polish",
-        "quick_wins",
-        "free",
-    ] = "free"
-    message: str = ""   # required for mode="free", optional context for others
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -116,7 +107,6 @@ def _require_latest_version(resume_object_id: ObjectId) -> dict:
 
 @router.get("/")
 async def list_resumes(current_user=Depends(get_current_user)):
-    """Return all resumes belonging to the current user, newest first."""
     cursor = db.db["resumes"].find(
         {"user_email": current_user},
         {"_id": 1, "title": 1, "candidate_name": 1, "current_version": 1, "created_at": 1},
@@ -144,7 +134,10 @@ async def upload_resume(
 
     metadata    = await extract_resume_metadata(text)
     resume_json = await structure_resume(text)
-    ats_result  = calculate_ats_score(text)
+
+    # Quality score only — no JD available at upload time.
+    # UI should label this "Resume Quality Score", not "ATS Score".
+    quality = calculate_quality_score(text)
 
     resume_id = await create_resume(
         user_email=current_user,
@@ -152,7 +145,7 @@ async def upload_resume(
         text=text,
         metadata=metadata,
         resume_json=resume_json,
-        ats_score=ats_result["overall_score"],
+        ats_score=quality["overall_score"],
     )
 
     return {
@@ -160,7 +153,7 @@ async def upload_resume(
         "candidate_name": metadata.get("candidate_name"),
         "version":        1,
         "resume_preview": resume_json,
-        "ats_score":      ats_result,
+        "quality_score":  quality,   # renamed from ats_score — no JD context yet
         "message":        "Resume uploaded and scored successfully.",
     }
 
@@ -174,24 +167,16 @@ async def chat_with_resume(
     current_user=Depends(get_current_user),
 ):
     """
-    Smart chat endpoint. Classifies every message before touching the resume:
+    Classifies message intent before doing anything:
+      OFF_TOPIC → friendly reply, no resume touched
+      ANALYZE   → feedback markdown, no version saved
+      EDIT      → rewrites resume, saves new version
 
-      OFF_TOPIC → friendly redirect reply, no resume loaded, zero extra API cost
-      ANALYZE   → analyze_resume() — returns markdown feedback, no version saved
-      EDIT      → modify_resume()  — rewrites resume, saves new version
-
-    Response always includes an `intent` field so the frontend knows
-    how to render the result:
-      "off_topic" → show reply text as a chat bubble, nothing else updates
-      "analyze"   → show feedback markdown in chat panel, preview unchanged
-      "edit"      → update resume preview, ATS ring, and version history
+    Response always includes `intent` field for frontend routing.
     """
-
-    # ── Step 1: classify intent (regex first, tiny LLM call as fallback) ─────
     classification = await classify_intent(payload.message)
     intent = classification["intent"]
 
-    # ── Step 2: off-topic — return immediately, no resume touched ─────────────
     if intent == "OFF_TOPIC":
         return {
             "intent":  "off_topic",
@@ -199,7 +184,6 @@ async def chat_with_resume(
             "message": classification["reply"],
         }
 
-    # ── Step 3: load resume (only needed for EDIT and ANALYZE) ───────────────
     resume_object_id = _get_object_id(resume_id)
     _require_resume(resume_object_id, current_user)
     latest = _require_latest_version(resume_object_id)
@@ -211,7 +195,6 @@ async def chat_with_resume(
             detail="Structured resume JSON not found for this version.",
         )
 
-    # ── Step 4a: ANALYZE — return feedback, no version saved ─────────────────
     if intent == "ANALYZE":
         feedback = await analyze_resume(
             resume_json=current_json,
@@ -225,9 +208,9 @@ async def chat_with_resume(
             "message":        "Analysis complete.",
         }
 
-    # ── Step 4b: EDIT — rewrite resume, save new version ─────────────────────
+    # EDIT — quality score only (no JD in chat context)
     updated_json, updated_text = await modify_resume(current_json, payload.message)
-    ats_result   = calculate_ats_score(updated_text)
+    quality      = calculate_quality_score(updated_text)
     next_version = latest["version"] + 1
 
     db.db["resume_versions"].insert_one({
@@ -236,7 +219,7 @@ async def chat_with_resume(
         "change_reason":         payload.message,
         "optimized_text":        updated_text,
         "optimized_resume_json": updated_json,
-        "ats_score":             ats_result["overall_score"],
+        "ats_score":             quality["overall_score"],
         "created_at":            datetime.utcnow(),
     })
 
@@ -246,12 +229,12 @@ async def chat_with_resume(
     )
 
     return {
-        "intent":       "edit",
-        "version":      next_version,
-        "resume":       updated_json,
-        "updated_text": updated_text,
-        "ats_score":    ats_result,
-        "message":      "Resume updated successfully.",
+        "intent":        "edit",
+        "version":       next_version,
+        "resume":        updated_json,
+        "updated_text":  updated_text,
+        "quality_score": quality,   # structural quality — no JD
+        "message":       "Resume updated successfully.",
     }
 
 
@@ -333,10 +316,6 @@ async def restore_version(
     version: int,
     current_user=Depends(get_current_user),
 ):
-    """
-    Restores an older version by creating a new version with the same content.
-    Non-destructive — full history is always preserved.
-    """
     resume_object_id = _get_object_id(resume_id)
     _require_resume(resume_object_id, current_user)
 
@@ -432,18 +411,22 @@ async def download_pdf(
     )
 
 
-# ── 11. ATS Score ─────────────────────────────────────────────────────────────
+# ── 11. Resume Quality Score ──────────────────────────────────────────────────
 
 @router.get("/{resume_id}/ats-score")
 async def get_ats_score(
     resume_id: str,
     current_user=Depends(get_current_user),
 ):
+    """
+    Returns structural quality score (sections, verbs, metrics).
+    No JD needed. Label in UI: "Resume Quality Score".
+    """
     resume_object_id = _get_object_id(resume_id)
     _require_resume(resume_object_id, current_user)
     latest = _require_latest_version(resume_object_id)
 
-    return calculate_ats_score(latest["optimized_text"])
+    return calculate_quality_score(latest["optimized_text"])
 
 
 # ── 12. Job Match ─────────────────────────────────────────────────────────────
@@ -455,9 +438,10 @@ async def job_match(
     current_user=Depends(get_current_user),
 ):
     """
-    Scores how well the current resume matches a given job description.
-    Returns match_score, matched keywords/phrases, and missing keywords.
-    Use BEFORE /optimize-for-job to see the gap, and AFTER to confirm improvement.
+    Keyword overlap score between resume and JD.
+    Label in UI: "ATS Match Score".
+    Use BEFORE /optimize-for-job to see the gap.
+    The score from /optimize-for-job uses the same algorithm — numbers are comparable.
     """
     resume_object_id = _get_object_id(resume_id)
     _require_resume(resume_object_id, current_user)
@@ -477,11 +461,10 @@ async def optimize_for_job_endpoint(
     """
     Full JD-targeted resume rewrite.
 
-    Flow:
-      1. Calculate keyword gaps with job_match_service.
-      2. Call job_optimizer_service with a specialist ATS-optimization prompt.
-      3. Recalculate ATS score using the JD for dynamic keyword evaluation.
-      4. Save as a new version with change_reason = 'Optimized for Job Description'.
+    ATS scoring uses calculate_ats_match() which is the SAME algorithm
+    as /job-match (calculate_match). So match_score_before and
+    ats_score.overall_score after are directly comparable — no more
+    inflated-100-then-drops-on-recheck problem.
     """
     resume_object_id = _get_object_id(resume_id)
     _require_resume(resume_object_id, current_user)
@@ -497,7 +480,9 @@ async def optimize_for_job_endpoint(
         missing_keywords=missing_keywords,
     )
 
-    ats_result   = calculate_ats_score(updated_text, payload.job_description)
+    # Use calculate_ats_match — same algorithm as calculate_match above
+    # so match_score_before and overall_score are on the same scale
+    ats_match    = calculate_ats_match(updated_text, payload.job_description)
     next_version = latest["version"] + 1
 
     db.db["resume_versions"].insert_one({
@@ -506,7 +491,7 @@ async def optimize_for_job_endpoint(
         "change_reason":         "Optimized for Job Description",
         "optimized_text":        updated_text,
         "optimized_resume_json": updated_json,
-        "ats_score":             ats_result["overall_score"],
+        "ats_score":             ats_match["overall_score"],
         "created_at":            datetime.utcnow(),
     })
 
@@ -518,8 +503,9 @@ async def optimize_for_job_endpoint(
     return {
         "version":            next_version,
         "match_score_before": match_result["match_score"],
+        "match_score_after":  ats_match["overall_score"],
         "missing_keywords":   missing_keywords,
-        "ats_score":          ats_result,
+        "ats_score":          ats_match,
         "resume":             updated_json,
         "message":            "Resume optimized for the job description.",
     }
@@ -533,10 +519,6 @@ async def generate_cover_letter_endpoint(
     payload: CoverLetterRequest,
     current_user=Depends(get_current_user),
 ):
-    """
-    Generates a tailored cover letter from the latest resume version
-    and the provided job description. Does not create a new version.
-    """
     resume_object_id = _get_object_id(resume_id)
     _require_resume(resume_object_id, current_user)
     latest = _require_latest_version(resume_object_id)
@@ -552,138 +534,4 @@ async def generate_cover_letter_endpoint(
         "cover_letter":   cover_letter,
         "resume_version": latest["version"],
         "tone":           payload.tone,
-    }
-
-
-# ── 15. Analyze Resume ────────────────────────────────────────────────────────
-
-@router.post("/{resume_id}/analyze")
-async def analyze_resume_endpoint(
-    resume_id: str,
-    payload: ResumeAnalyzeRequest,
-    current_user=Depends(get_current_user),
-):
-    """
-    Returns AI feedback/critique on the resume as plain markdown text.
-    Does NOT create a new version — purely read-only analysis.
-
-    mode options:
-      recruiter_scan  — 10-second first-impression test
-      deep_critique   — find every weakness systematically
-      bullet_audit    — score and rewrite every bullet point
-      positioning     — industry alignment and summary rewrite
-      final_polish    — executive language refinement pass
-      quick_wins      — top 3 highest-impact changes right now
-      free            — any custom question (requires message field)
-
-    Called directly when the user picks a prompt template chip.
-    Also called automatically from /chat when the intent classifier
-    detects an analysis request in a free-typed message.
-    """
-    resume_object_id = _get_object_id(resume_id)
-    _require_resume(resume_object_id, current_user)
-    latest = _require_latest_version(resume_object_id)
-
-    resume_json = latest.get("optimized_resume_json")
-    if not resume_json:
-        raise HTTPException(
-            status_code=500,
-            detail="Resume JSON not found for this version.",
-        )
-
-    if payload.mode == "free" and not payload.message.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="message is required when mode is 'free'.",
-        )
-
-    feedback = await analyze_resume(
-        resume_json=resume_json,
-        mode=payload.mode,
-        custom_message=payload.message,
-    )
-
-    return {
-        "intent":         "analyze",
-        "mode":           payload.mode,
-        "feedback":       feedback,
-        "resume_version": latest["version"],
-    }
-
-
-# ── 16. Get Prompt Templates ──────────────────────────────────────────────────
-
-@router.get("/prompt-templates")
-async def get_prompt_templates():
-    """
-    Returns all available prompt templates for the chat panel.
-    No auth required — these are static UI definitions.
-
-    The frontend renders these as clickable chips above the chat input.
-    Each template has:
-      - mode:        maps to the /analyze endpoint's mode field
-                     OR "edit" for templates that call /chat
-      - type:        "analyze" or "edit" — tells the frontend which
-                     endpoint to call and how to render the response
-      - label:       short chip label shown in the UI
-      - description: one-line hint shown under the chip
-      - message:     the exact prompt text sent to the backend
-                     (frontend populates the chat input with this,
-                      user can edit before sending — or send directly
-                      for template chips that bypass the input)
-
-    For type="analyze": call POST /{resume_id}/analyze with { mode, message }
-    For type="edit":    call POST /{resume_id}/chat with { message }
-    """
-    return {
-        "templates": [
-            {
-                "id":          "recruiter_scan",
-                "type":        "analyze",
-                "mode":        "recruiter_scan",
-                "label":       "10-second scan",
-                "description": "What a recruiter sees in the first 10 seconds",
-                "message":     "",   # no free-text needed — mode drives the prompt
-            },
-            {
-                "id":          "deep_critique",
-                "type":        "analyze",
-                "mode":        "deep_critique",
-                "label":       "Find every weak area",
-                "description": "Raw assessment of what could get you skipped",
-                "message":     "",
-            },
-            {
-                "id":          "bullet_audit",
-                "type":        "analyze",
-                "mode":        "bullet_audit",
-                "label":       "Audit bullet points",
-                "description": "Score every bullet and rewrite the weak ones",
-                "message":     "",
-            },
-            {
-                "id":          "positioning",
-                "type":        "analyze",
-                "mode":        "positioning",
-                "label":       "Reposition for industry",
-                "description": "Align summary and skills to your target field",
-                "message":     "",
-            },
-            {
-                "id":          "final_polish",
-                "type":        "analyze",
-                "mode":        "final_polish",
-                "label":       "Final polish pass",
-                "description": "Hunt vague phrases, weak verbs, inconsistencies",
-                "message":     "",
-            },
-            {
-                "id":          "quick_wins",
-                "type":        "analyze",
-                "mode":        "quick_wins",
-                "label":       "Quick wins",
-                "description": "Top 3 highest-impact changes right now",
-                "message":     "",
-            },
-        ]
     }
