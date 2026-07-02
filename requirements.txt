@@ -1,21 +1,45 @@
+# ── Web framework ─────────────────────────────────────────────
 fastapi
 uvicorn
+
+# ── AI / LLM clients ──────────────────────────────────────────
+anthropic
 openai
-mcp
-python-dotenv
+
+# ── Database ──────────────────────────────────────────────────
+pymongo                    # also provides `bson` (ObjectId used in routes.py)
+
+# ── Vector search ─────────────────────────────────────────────
+faiss-cpu                  # FIX: was missing — used in version_service, vector_store_service, retrieval_service
+numpy                      # FIX: was missing — used in vector_store_service
+
+# ── Resume parsing ────────────────────────────────────────────
+PyMuPDF                    # FIX: replaces the broken `fitz` package — import as `import pymupdf as fitz`
+python-docx                # .docx read/write (docx_service, parser_service, formatter_service)
+
+# ── Resume export ─────────────────────────────────────────────
+reportlab                  # PDF generation (pdf_service)
+pillow                     # Image handling (reportlab dependency)
+
+# ── Data validation ───────────────────────────────────────────
+pydantic                   # FIX: was missing — used everywhere (resume_schema, claude_client, routes)
+
+# ── Auth & security ───────────────────────────────────────────
+python-jose[cryptography]
+itsdangerous
+
+# ── Google APIs ───────────────────────────────────────────────
 google-auth
 google-auth-oauthlib
 google-api-python-client
-python-jose[cryptography]
-itsdangerous
-httpx
-pymongo
-fastmcp
-PyMuPDF
-python-docx
-pillow
-pytesseract
-reportlab
-anthropic
-faiss
 
+# ── HTTP & utilities ──────────────────────────────────────────
+httpx
+python-dotenv
+
+# ── MCP ───────────────────────────────────────────────────────
+mcp
+fastmcp
+
+# ── OCR (optional — only needed if pytesseract is called) ─────
+pytesseract
