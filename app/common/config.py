@@ -51,3 +51,9 @@ GMAIL_PUBSUB_TOPIC = os.getenv(
 )
 
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
+
+# Job Browse APIs
+ADZUNA_APP_ID  = os.getenv("ADZUNA_APP_ID")
+ADZUNA_APP_KEY = os.getenv("ADZUNA_APP_KEY")
+JSEARCH_API_KEY = os.getenv("JSEARCH_API_KEY")   
+JSEARCH_VIA_RAPIDAPI = os.getenv("JSEARCH_VIA_RAPIDAPI")
