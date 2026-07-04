@@ -1,16 +1,19 @@
 """
 cover_letter_service.py
 ------------------------
-Token optimizations:
-  - Uses Haiku via generate_text() (was Sonnet) — ~20x cheaper for prose
-  - Sends plain text resume instead of JSON — saves ~400 tokens
-  - Capped at 500 output tokens (cover letters should be concise)
+Generates a tailored cover letter from resume plain text + job description.
+
+Updated for v3:
+  - Uses OpenAI (gpt-4.1-mini) instead of Claude — consistent with
+    the rest of the simplified module
+  - Takes resume_text (str) directly — no JSON, no render_resume_text()
+  - No dependencies on any deleted services
 """
 
-import json
-from app.resume.services.claude_client import generate_text
-from app.resume.services.resume_renderer import render_resume_text
+from openai import AsyncOpenAI
+from app.common.config import OPENAI_API_KEY
 
+client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 _SYSTEM = """You are an expert cover letter writer and career coach.
 
@@ -31,24 +34,26 @@ _TONE_GUIDE = {
 
 
 async def generate_cover_letter(
-    resume_json: dict,
+    resume_text: str,
     job_description: str,
     company_name: str = "",
     tone: str = "professional",
 ) -> str:
-    resume_text = render_resume_text(resume_json)
-    tone_note   = _TONE_GUIDE.get(tone, _TONE_GUIDE["professional"])
+    tone_note = _TONE_GUIDE.get(tone, _TONE_GUIDE["professional"])
 
-    user_content = (
-        f"TONE: {tone_note}\n"
-        f"COMPANY: {company_name or 'the company'}\n\n"
-        f"RESUME:\n{resume_text}\n\n"
-        f"JOB DESCRIPTION:\n{job_description}"
-    )
-
-    return await generate_text(
-        system_prompt=_SYSTEM,
-        user_content=user_content,
+    response = await client.chat.completions.create(
+        model="gpt-4.1-mini",
         max_tokens=500,
         temperature=0.4,
+        messages=[
+            {"role": "system", "content": _SYSTEM},
+            {"role": "user", "content": (
+                f"TONE: {tone_note}\n"
+                f"COMPANY: {company_name or 'the company'}\n\n"
+                f"RESUME:\n{resume_text}\n\n"
+                f"JOB DESCRIPTION:\n{job_description}"
+            )},
+        ],
     )
+
+    return response.choices[0].message.content.strip()

@@ -1,78 +1,84 @@
 """
-routes.py
----------
-FastAPI router for the Resume Optimizer module.
+routes.py  — Resume Analyzer (v3, simplified)
+----------------------------------------------
+Replaces the entire previous resume optimizer module.
 
-ATS SCORING STRATEGY (important — read before changing):
+What's GONE (removed):
+  - Resume structuring to JSON (no more ResumeData schema)
+  - Chat edits / modify_resume
+  - Job optimizer / rewriting
+  - Cover letter generation
+  - DOCX/PDF download generation
+  - Version history
+  - Embedding / FAISS vector store
+  - ATS score on upload
+  - Intent classifier
+  - Analyze endpoint (separate)
+  - Prompt templates
 
-  calculate_quality_score(text)
-    → Sections + action verbs + metrics. No JD. Honest structural quality.
-    → Used by: /upload, /chat (edit intent), /ats-score
-    → UI label: "Resume Quality Score"
+What's HERE (new, slim):
+  - Upload resume → extract text → store plain text only
+  - Analyze resume against a JD → accurate LLM-based ATS score
+  - List user's resumes
+  - Delete a resume
 
-  calculate_ats_match(text, jd)
-    → Keyword overlap with JD. SAME algorithm as /job-match so numbers agree.
-    → Used by: /optimize-for-job only
-    → UI label: "ATS Match Score"
+Storage: resumes collection stores plain text only.
+No resume_versions, no resume_chunks, no FAISS indexes.
 
-  /job-match uses calculate_match() from job_match_service (unchanged).
-  /optimize-for-job uses calculate_ats_match() which is the same algorithm,
-  so the score before optimization (from /job-match) and after (from
-  /optimize-for-job) are directly comparable — no more 100 → 60 confusion.
+Endpoints:
+  POST /resume/upload          — upload PDF or DOCX, store plain text
+  GET  /resume/                — list user's resumes
+  GET  /resume/{resume_id}     — get a single resume's text
+  DELETE /resume/{resume_id}   — delete a resume
+  POST /resume/{resume_id}/analyze — analyze against a JD, return ATS report
 """
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Optional
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.auth.dependencies import get_current_user
 from app.common.db import db
 
-from app.resume.services.analyze_service import analyze_resume
-from app.resume.services.ats_service import (
-    calculate_quality_score,
-    calculate_ats_match,
-)
-from app.resume.services.chat_service import modify_resume
-from app.resume.services.cover_letter_service import generate_cover_letter
-from app.resume.services.docx_service import generate_docx_bytes
-from app.resume.services.intent_service import classify_intent
-from app.resume.services.job_match_service import calculate_match
-from app.resume.services.job_optimizer_service import optimize_for_job
-from app.resume.services.metadata_service import extract_resume_metadata
 from app.resume.services.parser_service import extract_resume_text
-from app.resume.services.pdf_service import generate_pdf_bytes
-from app.resume.services.structure_service import structure_resume
-from app.resume.services.validator_service import validate_resume_file, validate_resume_text
-from app.resume.services.version_service import create_resume
+from app.resume.services.validator_service import (
+    validate_resume_file,
+    validate_resume_text,
+)
+from app.resume.services.ats_analyzer_service import analyze_resume_against_jd
+from app.resume.services.cover_letter_service import generate_cover_letter
 
 router = APIRouter()
 
 
 # ── Request Models ────────────────────────────────────────────────────────────
 
-class ResumeChatRequest(BaseModel):
-    message: str
-
-
-class JobMatchRequest(BaseModel):
+class AnalyzeRequest(BaseModel):
     job_description: str
 
-
-class JobOptimizationRequest(BaseModel):
-    job_description: str
+    @field_validator("job_description", mode="before")
+    @classmethod
+    def clean_jd(cls, v):
+        if isinstance(v, str):
+            # Strip control characters that break JSON parsing
+            return v.replace("\r\n", "\n").replace("\r", "\n").strip()
+        return v
 
 
 class CoverLetterRequest(BaseModel):
     job_description: str
     company_name: Optional[str] = ""
-    tone: Optional[str] = "professional"
+    tone: Optional[str] = "professional"   # professional | enthusiastic | concise
 
-
+    @field_validator("job_description", mode="before")
+    @classmethod
+    def clean_jd(cls, v):
+        if isinstance(v, str):
+            return v.replace("\r\n", "\n").replace("\r", "\n").strip()
+        return v
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -85,452 +91,261 @@ def _get_object_id(resume_id: str) -> ObjectId:
 
 
 def _require_resume(resume_object_id: ObjectId, current_user: str) -> dict:
-    resume = db.db["resumes"].find_one(
-        {"_id": resume_object_id, "user_email": current_user}
-    )
+    resume = db.db["resumes"].find_one({
+        "_id": resume_object_id,
+        "user_email": current_user,
+    })
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found.")
     return resume
 
 
-def _require_latest_version(resume_object_id: ObjectId) -> dict:
-    latest = db.db["resume_versions"].find_one(
-        {"resume_id": resume_object_id},
-        sort=[("version", -1)],
-    )
-    if not latest:
-        raise HTTPException(status_code=404, detail="No resume versions found.")
-    return latest
-
-
-# ── 1. List All Resumes ───────────────────────────────────────────────────────
-
-@router.get("/")
-async def list_resumes(current_user=Depends(get_current_user)):
-    cursor = db.db["resumes"].find(
-        {"user_email": current_user},
-        {"_id": 1, "title": 1, "candidate_name": 1, "current_version": 1, "created_at": 1},
-    ).sort("created_at", -1)
-
-    results = []
-    for doc in cursor:
-        doc["resume_id"] = str(doc.pop("_id"))
-        results.append(doc)
-    return results
-
-
-# ── 2. Upload Resume ──────────────────────────────────────────────────────────
+# ── 1. Upload Resume ──────────────────────────────────────────────────────────
 
 @router.post("/upload")
 async def upload_resume(
     file: UploadFile = File(...),
     current_user=Depends(get_current_user),
 ):
+    """
+    Upload a PDF or DOCX resume.
+    Extracts plain text and stores it — nothing else.
+    No JSON structuring, no ATS score, no version history.
+
+    Response:
+    {
+        "resume_id": "64f1a2b3c4d5e6f7a8b9c0d1",
+        "filename": "my_resume.pdf",
+        "message": "Resume uploaded successfully."
+    }
+    """
     validate_resume_file(file.filename)
     file_bytes = await file.read()
 
-    text        = await extract_resume_text(file.filename, file_bytes)
+    text = await extract_resume_text(file.filename, file_bytes)
     validate_resume_text(text)
 
-    metadata    = await extract_resume_metadata(text)
-    resume_json = await structure_resume(text)
-
-    # No score on upload — a score without a JD is meaningless.
-    # The user gets a real ATS match score after /job-match or /optimize-for-job.
-    resume_id = await create_resume(
-        user_email=current_user,
-        title=file.filename,
-        text=text,
-        metadata=metadata,
-        resume_json=resume_json,
-        ats_score=None,
-    )
+    result = db.db["resumes"].insert_one({
+        "user_email":  current_user,
+        "filename":    file.filename,
+        "text":        text,
+        "created_at":  datetime.utcnow(),
+    })
 
     return {
-        "resume_id":      resume_id,
-        "candidate_name": metadata.get("candidate_name"),
-        "version":        1,
-        "resume_preview": resume_json,
-        "ats_score":      None,
-        "message":        "Resume uploaded successfully.",
+        "resume_id": str(result.inserted_id),
+        "filename":  file.filename,
+        "message":   "Resume uploaded successfully.",
     }
 
 
-# ── 3. Smart Chat ─────────────────────────────────────────────────────────────
+# ── 2. List Resumes ───────────────────────────────────────────────────────────
 
-@router.post("/{resume_id}/chat")
-async def chat_with_resume(
+@router.get("/")
+async def list_resumes(current_user=Depends(get_current_user)):
+    """
+    List all resumes uploaded by the current user.
+
+    Response:
+    [
+        {
+            "resume_id": "...",
+            "filename": "my_resume.pdf",
+            "created_at": "2026-07-03T10:00:00"
+        }
+    ]
+    """
+    cursor = db.db["resumes"].find(
+        {"user_email": current_user},
+        {"_id": 1, "filename": 1, "created_at": 1},
+    ).sort("created_at", -1)
+
+    results = []
+    for doc in cursor:
+        results.append({
+            "resume_id":  str(doc["_id"]),
+            "filename":   doc.get("filename", ""),
+            "created_at": doc.get("created_at", "").isoformat() if doc.get("created_at") else "",
+        })
+    return results
+
+
+# ── 3. Get Resume ─────────────────────────────────────────────────────────────
+
+@router.get("/{resume_id}")
+async def get_resume(
     resume_id: str,
-    payload: ResumeChatRequest,
     current_user=Depends(get_current_user),
 ):
     """
-    Classifies message intent before doing anything:
-      OFF_TOPIC → friendly reply, no resume touched
-      ANALYZE   → feedback markdown, no version saved
-      EDIT      → rewrites resume, saves new version
+    Get a single resume's text and metadata.
 
-    Response always includes `intent` field for frontend routing.
+    Response:
+    {
+        "resume_id": "...",
+        "filename": "my_resume.pdf",
+        "text": "Jane Smith\njane@example.com\n...",
+        "created_at": "2026-07-03T10:00:00"
+    }
     """
-    classification = await classify_intent(payload.message)
-    intent = classification["intent"]
-
-    if intent == "OFF_TOPIC":
-        return {
-            "intent":  "off_topic",
-            "reply":   classification["reply"],
-            "message": classification["reply"],
-        }
-
     resume_object_id = _get_object_id(resume_id)
-    _require_resume(resume_object_id, current_user)
-    latest = _require_latest_version(resume_object_id)
-
-    current_json = latest.get("optimized_resume_json")
-    if not current_json:
-        raise HTTPException(
-            status_code=500,
-            detail="Structured resume JSON not found for this version.",
-        )
-
-    if intent == "ANALYZE":
-        feedback = await analyze_resume(
-            resume_json=current_json,
-            mode="free",
-            custom_message=payload.message,
-        )
-        return {
-            "intent":         "analyze",
-            "feedback":       feedback,
-            "resume_version": latest["version"],
-            "message":        "Analysis complete.",
-        }
-
-    # EDIT — no score recalculated after chat edits.
-    # ATS score is only meaningful against a specific JD.
-    # The version history stores null for ats_score on chat edits.
-    updated_json, updated_text = await modify_resume(current_json, payload.message)
-    next_version = latest["version"] + 1
-
-    db.db["resume_versions"].insert_one({
-        "resume_id":             resume_object_id,
-        "version":               next_version,
-        "change_reason":         payload.message,
-        "optimized_text":        updated_text,
-        "optimized_resume_json": updated_json,
-        "ats_score":             None,
-        "created_at":            datetime.utcnow(),
-    })
-
-    db.db["resumes"].update_one(
-        {"_id": resume_object_id},
-        {"$set": {"current_version": next_version}},
-    )
+    resume = _require_resume(resume_object_id, current_user)
 
     return {
-        "intent":       "edit",
-        "version":      next_version,
-        "resume":       updated_json,
-        "updated_text": updated_text,
-        "ats_score":    None,
-        "message":      "Resume updated successfully.",
+        "resume_id":  resume_id,
+        "filename":   resume.get("filename", ""),
+        "text":       resume.get("text", ""),
+        "created_at": resume.get("created_at", "").isoformat() if resume.get("created_at") else "",
     }
 
 
-# ── 4. Get Version History ────────────────────────────────────────────────────
-
-@router.get("/{resume_id}/versions")
-async def get_resume_versions(
-    resume_id: str,
-    current_user=Depends(get_current_user),
-):
-    resume_object_id = _get_object_id(resume_id)
-    _require_resume(resume_object_id, current_user)
-
-    versions = list(
-        db.db["resume_versions"]
-        .find(
-            {"resume_id": resume_object_id},
-            {"_id": 0, "version": 1, "change_reason": 1, "ats_score": 1, "created_at": 1},
-        )
-        .sort("version", -1)
-    )
-    return versions
-
-
-# ── 5. Preview Latest Resume ──────────────────────────────────────────────────
-
-@router.get("/{resume_id}/preview")
-async def preview_latest_resume(
-    resume_id: str,
-    current_user=Depends(get_current_user),
-):
-    resume_object_id = _get_object_id(resume_id)
-    _require_resume(resume_object_id, current_user)
-    latest = _require_latest_version(resume_object_id)
-
-    return {
-        "resume_id":       resume_id,
-        "current_version": latest["version"],
-        "resume":          latest.get("optimized_resume_json"),
-        "text":            latest.get("optimized_text"),
-        "ats_score":       latest.get("ats_score"),
-        "updated_at":      latest["created_at"],
-    }
-
-
-# ── 6. Preview Specific Version ───────────────────────────────────────────────
-
-@router.get("/{resume_id}/preview/{version}")
-async def preview_version(
-    resume_id: str,
-    version: int,
-    current_user=Depends(get_current_user),
-):
-    resume_object_id = _get_object_id(resume_id)
-    _require_resume(resume_object_id, current_user)
-
-    doc = db.db["resume_versions"].find_one(
-        {"resume_id": resume_object_id, "version": version}
-    )
-    if not doc:
-        raise HTTPException(status_code=404, detail="Version not found.")
-
-    return {
-        "resume_id":     resume_id,
-        "version":       doc["version"],
-        "resume":        doc.get("optimized_resume_json"),
-        "text":          doc.get("optimized_text"),
-        "ats_score":     doc.get("ats_score"),
-        "updated_at":    doc["created_at"],
-        "change_reason": doc.get("change_reason"),
-    }
-
-
-# ── 7. Restore a Version ──────────────────────────────────────────────────────
-
-@router.post("/{resume_id}/restore/{version}")
-async def restore_version(
-    resume_id: str,
-    version: int,
-    current_user=Depends(get_current_user),
-):
-    resume_object_id = _get_object_id(resume_id)
-    _require_resume(resume_object_id, current_user)
-
-    target = db.db["resume_versions"].find_one(
-        {"resume_id": resume_object_id, "version": version}
-    )
-    if not target:
-        raise HTTPException(status_code=404, detail="Version not found.")
-
-    latest       = _require_latest_version(resume_object_id)
-    next_version = latest["version"] + 1
-
-    db.db["resume_versions"].insert_one({
-        "resume_id":             resume_object_id,
-        "version":               next_version,
-        "change_reason":         f"Restored from version {version}",
-        "optimized_text":        target["optimized_text"],
-        "optimized_resume_json": target["optimized_resume_json"],
-        "ats_score":             target.get("ats_score"),
-        "created_at":            datetime.utcnow(),
-    })
-
-    db.db["resumes"].update_one(
-        {"_id": resume_object_id},
-        {"$set": {"current_version": next_version}},
-    )
-
-    return {
-        "message":       f"Restored version {version} as new version {next_version}.",
-        "new_version":   next_version,
-        "restored_from": version,
-    }
-
-
-# ── 8. Delete Resume ──────────────────────────────────────────────────────────
+# ── 4. Delete Resume ──────────────────────────────────────────────────────────
 
 @router.delete("/{resume_id}")
 async def delete_resume(
     resume_id: str,
     current_user=Depends(get_current_user),
 ):
+    """
+    Delete a resume permanently.
+
+    Response:
+    {
+        "message": "Resume deleted.",
+        "resume_id": "..."
+    }
+    """
     resume_object_id = _get_object_id(resume_id)
     _require_resume(resume_object_id, current_user)
 
-    db.db["resume_versions"].delete_many({"resume_id": resume_object_id})
-    db.db["resume_chunks"].delete_many({"resume_id": resume_object_id})
     db.db["resumes"].delete_one({"_id": resume_object_id})
 
-    return {"message": "Resume and all versions deleted.", "resume_id": resume_id}
+    return {"message": "Resume deleted.", "resume_id": resume_id}
 
 
-# ── 9. Download DOCX ──────────────────────────────────────────────────────────
+# ── 5. Analyze Resume Against JD ──────────────────────────────────────────────
 
-@router.get("/{resume_id}/download/docx")
-async def download_docx(
+@router.post("/{resume_id}/analyze")
+async def analyze_resume(
     resume_id: str,
+    payload: AnalyzeRequest,
     current_user=Depends(get_current_user),
 ):
+    """
+    Analyze a resume against a job description using LLM-based ATS scoring.
+
+    This is accurate because the model semantically understands both documents —
+    "led a team" matches "team leadership", not just exact string overlap.
+
+    Request:
+    {
+        "job_description": "We are looking for a Python engineer..."
+    }
+
+    Response:
+    {
+        "resume_id": "...",
+        "overall_score": 67,
+        "score_breakdown": {
+            "keyword_match":        { "score": 26, "max": 40, "comment": "..." },
+            "skills_alignment":     { "score": 18, "max": 25, "comment": "..." },
+            "experience_relevance": { "score": 13, "max": 20, "comment": "..." },
+            "education_fit":        { "score": 8,  "max": 10, "comment": "..." },
+            "resume_structure":     { "score": 2,  "max": 5,  "comment": "..." }
+        },
+        "matched_keywords":  ["Python", "FastAPI", "REST API", "team leadership"],
+        "missing_keywords":  ["Kubernetes", "Terraform", "GraphQL", "CI/CD"],
+        "skill_gaps": [
+            {
+                "skill": "Kubernetes",
+                "importance": "required",
+                "reason": "Role involves managing containerised microservices at scale."
+            }
+        ],
+        "experience_gaps": [
+            "No demonstrated experience leading cross-functional teams of 5+ engineers"
+        ],
+        "strengths": [
+            "Strong Python and FastAPI background directly matches core stack",
+            "AWS experience aligns with cloud infrastructure requirements"
+        ],
+        "improvements": [
+            {
+                "section": "Skills",
+                "issue": "Kubernetes not mentioned despite being a required skill",
+                "suggestion": "Add Kubernetes to skills section if you have experience; if not, highlight container orchestration experience with Docker Compose or ECS"
+            }
+        ],
+        "verdict": "This resume shows strong backend engineering fundamentals and aligns well with 60% of the requirements. The missing Kubernetes and Terraform experience is a significant gap for this DevOps-heavy role. A recruiter would likely pass this to the next stage only if the team is willing to train on those tools."
+    }
+    """
     resume_object_id = _get_object_id(resume_id)
     resume = _require_resume(resume_object_id, current_user)
-    latest = _require_latest_version(resume_object_id)
 
-    docx_file      = generate_docx_bytes(latest["optimized_resume_json"])
-    candidate_name = resume.get("candidate_name") or "resume"
-    filename       = f"{candidate_name}_v{latest['version']}.docx"
+    text = resume.get("text", "")
+    if not text:
+        raise HTTPException(status_code=400, detail="Resume text is empty.")
 
-    return StreamingResponse(
-        docx_file,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    jd = payload.job_description.strip().replace("\r\n", "\n").replace("\r", "\n")
+    if not jd:
+        raise HTTPException(status_code=400, detail="Job description is required.")
 
-
-# ── 10. Download PDF ──────────────────────────────────────────────────────────
-
-@router.get("/{resume_id}/download/pdf")
-async def download_pdf(
-    resume_id: str,
-    current_user=Depends(get_current_user),
-):
-    resume_object_id = _get_object_id(resume_id)
-    resume = _require_resume(resume_object_id, current_user)
-    latest = _require_latest_version(resume_object_id)
-
-    pdf_file       = generate_pdf_bytes(latest["optimized_resume_json"])
-    candidate_name = resume.get("candidate_name") or "resume"
-    filename       = f"{candidate_name}_v{latest['version']}.pdf"
-
-    return StreamingResponse(
-        pdf_file,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-# ── 11. Resume Quality Score ──────────────────────────────────────────────────
-
-@router.get("/{resume_id}/ats-score")
-async def get_ats_score(
-    resume_id: str,
-    current_user=Depends(get_current_user),
-):
-    """
-    Returns structural quality score (sections, verbs, metrics).
-    No JD needed. Label in UI: "Resume Quality Score".
-    """
-    resume_object_id = _get_object_id(resume_id)
-    _require_resume(resume_object_id, current_user)
-    latest = _require_latest_version(resume_object_id)
-
-    return calculate_quality_score(latest["optimized_text"])
-
-
-# ── 12. Job Match ─────────────────────────────────────────────────────────────
-
-@router.post("/{resume_id}/job-match")
-async def job_match(
-    resume_id: str,
-    payload: JobMatchRequest,
-    current_user=Depends(get_current_user),
-):
-    """
-    Keyword overlap score between resume and JD.
-    Label in UI: "ATS Match Score".
-    Use BEFORE /optimize-for-job to see the gap.
-    The score from /optimize-for-job uses the same algorithm — numbers are comparable.
-    """
-    resume_object_id = _get_object_id(resume_id)
-    _require_resume(resume_object_id, current_user)
-    latest = _require_latest_version(resume_object_id)
-
-    return calculate_match(latest["optimized_text"], payload.job_description)
-
-
-# ── 13. Optimize for Job ──────────────────────────────────────────────────────
-
-@router.post("/{resume_id}/optimize-for-job")
-async def optimize_for_job_endpoint(
-    resume_id: str,
-    payload: JobOptimizationRequest,
-    current_user=Depends(get_current_user),
-):
-    """
-    Full JD-targeted resume rewrite.
-
-    ATS scoring uses calculate_ats_match() which is the SAME algorithm
-    as /job-match (calculate_match). So match_score_before and
-    ats_score.overall_score after are directly comparable — no more
-    inflated-100-then-drops-on-recheck problem.
-    """
-    resume_object_id = _get_object_id(resume_id)
-    _require_resume(resume_object_id, current_user)
-    latest = _require_latest_version(resume_object_id)
-
-    current_json     = latest["optimized_resume_json"]
-    match_result     = calculate_match(latest["optimized_text"], payload.job_description)
-    missing_keywords = match_result["missing_keywords"]
-
-    updated_json, updated_text = await optimize_for_job(
-        resume_json=current_json,
-        job_description=payload.job_description,
-        missing_keywords=missing_keywords,
-    )
-
-    # Use calculate_ats_match — same algorithm as calculate_match above
-    # so match_score_before and overall_score are on the same scale
-    ats_match    = calculate_ats_match(updated_text, payload.job_description)
-    next_version = latest["version"] + 1
-
-    db.db["resume_versions"].insert_one({
-        "resume_id":             resume_object_id,
-        "version":               next_version,
-        "change_reason":         "Optimized for Job Description",
-        "optimized_text":        updated_text,
-        "optimized_resume_json": updated_json,
-        "ats_score":             ats_match["overall_score"],
-        "created_at":            datetime.utcnow(),
-    })
-
-    db.db["resumes"].update_one(
-        {"_id": resume_object_id},
-        {"$set": {"current_version": next_version}},
+    analysis = await analyze_resume_against_jd(
+        resume_text=text,
+        job_description=jd,
     )
 
     return {
-        "version":            next_version,
-        "match_score_before": match_result["match_score"],
-        "match_score_after":  ats_match["overall_score"],
-        "missing_keywords":   missing_keywords,
-        "ats_score":          ats_match,
-        "resume":             updated_json,
-        "message":            "Resume optimized for the job description.",
+        "resume_id": resume_id,
+        **analysis,
     }
 
 
-# ── 14. Generate Cover Letter ─────────────────────────────────────────────────
+# ── 6. Generate Cover Letter ──────────────────────────────────────────────────
 
 @router.post("/{resume_id}/cover-letter")
-async def generate_cover_letter_endpoint(
+async def cover_letter(
     resume_id: str,
     payload: CoverLetterRequest,
     current_user=Depends(get_current_user),
 ):
-    resume_object_id = _get_object_id(resume_id)
-    _require_resume(resume_object_id, current_user)
-    latest = _require_latest_version(resume_object_id)
+    """
+    Generate a tailored cover letter from the resume + job description.
 
-    cover_letter = await generate_cover_letter(
-        resume_json=latest["optimized_resume_json"],
-        job_description=payload.job_description,
+    Request:
+    {
+        "job_description": "We are looking for...",
+        "company_name": "Stripe",          // optional
+        "tone": "professional"             // professional | enthusiastic | concise
+    }
+
+    Response:
+    {
+        "resume_id": "...",
+        "cover_letter": "Dear Hiring Manager,\n\nAs a software engineer...",
+        "tone": "professional"
+    }
+    """
+    resume_object_id = _get_object_id(resume_id)
+    resume = _require_resume(resume_object_id, current_user)
+
+    text = resume.get("text", "")
+    if not text:
+        raise HTTPException(status_code=400, detail="Resume text is empty.")
+
+    jd = payload.job_description.strip().replace("\r\n", "\n").replace("\r", "\n")
+    if not jd:
+        raise HTTPException(status_code=400, detail="Job description is required.")
+
+    letter = await generate_cover_letter(
+        resume_text=text,
+        job_description=jd,
         company_name=payload.company_name or "",
         tone=payload.tone or "professional",
     )
 
     return {
-        "cover_letter":   cover_letter,
-        "resume_version": latest["version"],
-        "tone":           payload.tone,
+        "resume_id":    resume_id,
+        "cover_letter": letter,
+        "tone":         payload.tone,
     }

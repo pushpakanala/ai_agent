@@ -4,19 +4,17 @@ interview_routes.py
 FastAPI router for the Interview Coach module.
 
 Mount in main.py:
-    from app.interview.routes import router as interview_router
+    from app.interview.router.interview_routes import router as interview_router
     app.include_router(interview_router, prefix="/interview", tags=["Interview"])
 
-Endpoint:
-    POST /interview/prep   — generate interview prep from company + role
-
-No job_id needed. The frontend passes company_name and role directly
-from whichever job card the user clicked. Optional JD and resume_id
-improve the output but are never required.
+UPDATED for resume v3:
+  _get_resume_text() now reads directly from the resumes collection (text field)
+  instead of querying resume_versions (which no longer exists).
 """
 
 from typing import Optional
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -30,34 +28,31 @@ router = APIRouter()
 # ── Request model ─────────────────────────────────────────────────────────────
 
 class InterviewPrepRequest(BaseModel):
-    company_name: str               # from the job card — always present
-    role: str                       # from the job card — always present
-    job_description: Optional[str] = None   # optional paste — makes questions specific
-    resume_id: Optional[str] = None         # optional — personalises STAR answers
+    company_name: str
+    role: str
+    job_description: Optional[str] = None
+    resume_id: Optional[str] = None
 
 
-# ── Helper: fetch resume text if resume_id provided ───────────────────────────
+# ── Helper: fetch resume text ─────────────────────────────────────────────────
 
 def _get_resume_text(resume_id: str, current_user: str) -> str | None:
     """
-    Fetches the latest version's plain text for a resume_id.
-    Returns None silently if not found or belongs to a different user.
-    Resume is optional — never hard-fail the whole request over it.
+    Fetches plain text directly from the resumes collection.
+
+    FIX: Previously queried resume_versions collection which no longer
+    exists in v3. Resumes now store plain text directly on the document.
+    Returns None silently — resume is optional, never hard-fail over it.
     """
     try:
-        from bson import ObjectId
-        resume_object_id = ObjectId(resume_id)
         resume = db.db["resumes"].find_one({
-            "_id": resume_object_id,
+            "_id":        ObjectId(resume_id),
             "user_email": current_user,
         })
         if not resume:
             return None
-        latest = db.db["resume_versions"].find_one(
-            {"resume_id": resume_object_id},
-            sort=[("version", -1)],
-        )
-        return latest.get("optimized_text") if latest else None
+        # v3: plain text stored directly on the resume document
+        return resume.get("text") or None
     except Exception:
         return None
 
@@ -72,15 +67,8 @@ async def get_interview_prep(
     """
     Generate interview prep for a role at a company.
 
-    The frontend passes company_name and role directly from the job card.
-    No job_id needed — the backend doesn't look up any job record.
-
-    Optional inputs that improve output quality:
-      job_description — questions pulled from actual JD requirements
-      resume_id       — STAR answers use the candidate's real experience
-
-    Always generates fresh — no caching at this endpoint.
-    If you want caching, do it on the frontend (store by company+role key).
+    Frontend passes company_name and role from the job card.
+    Both resume_id and job_description are optional but improve output.
 
     Request:
     {
@@ -94,35 +82,29 @@ async def get_interview_prep(
     {
         "company_name": "Wipro",
         "role": "Software Engineer",
-        "is_personalised": false,
-        "has_jd": false,
+        "is_personalised": true,
+        "has_jd": true,
         "prep": {
             "questions": {
-                "behavioral": [
-                    {"question": "Tell me about a time...", "why_asked": "Tests ownership"}
-                ],
-                "technical": [
-                    {"question": "Design a scalable API...", "why_asked": "Tests system design"}
-                ]
+                "behavioral": [{"question": "...", "why_asked": "..."}],
+                "technical":  [{"question": "...", "why_asked": "..."}]
             },
             "company_brief": {
-                "interview_style": "Wipro typically...",
-                "what_they_value": ["teamwork", "delivery", "communication", "ownership"],
-                "red_flags_to_avoid": ["vague answers", "no examples"],
-                "tips": ["Have STAR examples ready", "Research their clients"],
-                "typical_process": "Usually 3-4 rounds..."
+                "interview_style": "...",
+                "what_they_value": [...],
+                "red_flags_to_avoid": [...],
+                "tips": [...],
+                "typical_process": "..."
             },
             "answer_frameworks": {
-                "frameworks": [
-                    {
-                        "question": "Tell me about a time you led a project",
-                        "situation": "At ADP, I was leading...",
-                        "task": "I was responsible for...",
-                        "action": "I first mapped all dependencies...",
-                        "result": "Reduced onboarding time by 40%",
-                        "tip": "Lead with the business impact"
-                    }
-                ]
+                "frameworks": [{
+                    "question": "...",
+                    "situation": "...",
+                    "task": "...",
+                    "action": "...",
+                    "result": "...",
+                    "tip": "..."
+                }]
             }
         }
     }
@@ -133,7 +115,6 @@ async def get_interview_prep(
             detail="company_name and role are required.",
         )
 
-    # Resolve optional resume text — silent None if not found
     resume_text = None
     if payload.resume_id:
         resume_text = _get_resume_text(payload.resume_id, current_user)
