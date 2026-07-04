@@ -206,38 +206,83 @@ def _score_article(article: dict, keywords: set[str]) -> int:
 
 # ── User profile extraction ───────────────────────────────────────────────────
 
+def _extract_skills_from_text(resume_text: str) -> list[str]:
+    """
+    Extract skills from plain resume text using common section markers.
+
+    v3 change: resumes are stored as plain text, not structured JSON.
+    We find the skills section and extract individual terms from it.
+    Works for both "Skills:" lists and "Technical Skills" sections.
+    """
+    import re
+
+    skills = []
+    lines  = resume_text.splitlines()
+
+    # Find lines that look like a skills section
+    in_skills = False
+    for line in lines:
+        stripped = line.strip()
+        lower    = stripped.lower()
+
+        # Detect start of skills section
+        if any(marker in lower for marker in [
+            "technical skills", "skills", "core competencies",
+            "technologies", "tools", "stack",
+        ]):
+            in_skills = True
+            continue
+
+        # Detect end of skills section (next major heading)
+        if in_skills and stripped and stripped.isupper():
+            break
+        if in_skills and any(marker in lower for marker in [
+            "experience", "education", "projects", "certifications",
+            "awards", "summary", "objective",
+        ]):
+            break
+
+        # Extract terms from skills lines
+        if in_skills and stripped:
+            # Handle "Category: skill1, skill2, skill3" format
+            if ":" in stripped:
+                _, _, rest = stripped.partition(":")
+                terms = [t.strip() for t in re.split(r"[,|·•]", rest) if t.strip()]
+            else:
+                terms = [t.strip() for t in re.split(r"[,|·•]", stripped) if t.strip()]
+
+            # Filter out very short or very long terms
+            skills.extend(t for t in terms if 2 < len(t) < 40)
+
+    return skills[:60]  # cap to avoid noise
+
+
 def _extract_user_profile(db, user_email: str) -> tuple[list, list, list]:
     """
     Pull skills, applied company names, and target roles from:
-      - Latest resume version (skills, experience companies)
+      - Latest resume (plain text — v3 storage)
       - Jobs collection (company_name, role)
     Returns (skills, companies, roles) as flat lists of strings.
+
+    FIX: Previously read from resume_versions.optimized_resume_json
+    which no longer exists in v3. Now reads plain text directly from
+    the resumes collection and extracts skills via regex.
     """
     skills    = []
     companies = []
     roles     = []
 
-    # From resume
+    # From resume — read plain text directly (v3)
     resume = db["resumes"].find_one(
         {"user_email": user_email},
         sort=[("created_at", -1)],
     )
     if resume:
-        latest = db["resume_versions"].find_one(
-            {"resume_id": resume["_id"]},
-            sort=[("version", -1)],
-        )
-        if latest:
-            rj = latest.get("optimized_resume_json", {})
-            # Skills dict: {"Languages": ["Python", "Java"], ...}
-            for category_skills in rj.get("skills", {}).values():
-                skills.extend(category_skills)
-            # Experience companies
-            for exp in rj.get("experience", []):
-                if exp.get("company"):
-                    companies.append(exp["company"])
+        text = resume.get("text", "")
+        if text:
+            skills = _extract_skills_from_text(text)
 
-    # From job tracker
+    # From job tracker — unchanged
     job_cursor = db["jobs"].find(
         {"user_email": user_email},
         {"company_name": 1, "role": 1},
