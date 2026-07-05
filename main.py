@@ -32,6 +32,9 @@ from app.news.routers.news_routes import (
 from app.job_browse.routers.job_browse_router import (
     router as job_browse_router,    
 )
+from app.admin.routers.admin_router import (
+    router as admin_router, 
+)
 from app.resume.routes import router as resume_router
 from app.jobs.routers.gmail_webhook_router import router as gmail_router
 from contextlib import asynccontextmanager
@@ -103,4 +106,9 @@ app.include_router(
     job_browse_router,
     prefix="/jobs",
     tags=["Job Browse"],
+)
+app.include_router(
+    admin_router,   
+    prefix="/admin",
+    tags=["Admin"],
 )
