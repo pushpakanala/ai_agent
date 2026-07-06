@@ -18,17 +18,20 @@ async def save_user(
     users = db.db["users"]
 
     users.update_one(
-        {"email": email},
-        {
-            "$set": {
-                "name": name,
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "updated_at": datetime.utcnow(),
-            }
+    {"email": email},
+    {
+        "$set": {
+            "name": name,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "updated_at": datetime.utcnow(),
         },
-        upsert=True,
-    )
+        "$setOnInsert": {
+            "created_at": datetime.utcnow(),
+        },
+    },
+    upsert=True,
+)
 
 
 # ==================================================
