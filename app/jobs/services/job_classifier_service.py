@@ -165,14 +165,57 @@ Email body:
         return ""
 
 
+# Keywords that strongly indicate NOT a job application email
+_NON_JOB_PATTERNS = [
+    r"take the survey",
+    r"tell us about your (application|interview|experience)",
+    r"candidate experience survey",
+    r"feedback.*survey",
+    r"survey.*feedback",
+    r"new job opportunities",
+    r"jobs you might like",
+    r"job alert",
+    r"profile is getting hits",
+    r"someone viewed your profile",
+    r"special price",
+    r"wordpress",
+    r"unsubscribe",
+    r"stay connected with",
+    r"your subscription",
+]
+
+_NON_JOB_RE = re.compile(
+    "|".join(_NON_JOB_PATTERNS),
+    re.IGNORECASE,
+)
+
+
+def _is_obviously_not_job(subject: str, body: str) -> bool:
+    """Quick pre-check before calling LLM — catches obvious non-job emails."""
+    text = f"{subject} {body[:500]}"
+    return bool(_NON_JOB_RE.search(text))
+
+
 def classify_job_email(subject: str, body: str, sender: str = "") -> dict:
     """
     Classify a job email with three-layer company name extraction.
 
+    Layer 0: Pre-check for obviously non-job emails (no API cost)
     Layer 1: Full LLM classification
     Layer 2: Regex scan if company_name empty
     Layer 3: Dedicated LLM company extraction if Layer 2 also fails
     """
+    # Layer 0 — fast pre-check, zero API cost
+    if _is_obviously_not_job(subject, body):
+        return {
+            "is_job_email":   False,
+            "company_name":   "",
+            "role":           "",
+            "job_id":         "",
+            "status":         "",
+            "confidence":     0,
+            "interview_date": None,
+        }
     prompt = f"""Subject:
 {subject}
 

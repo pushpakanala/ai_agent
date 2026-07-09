@@ -19,6 +19,14 @@ Rules:
 
 2. If not a job application email: { "is_job_email": false }
 
+   Mark as NOT a job email (is_job_email: false) if the email is:
+   - A survey or feedback request ("take the survey", "tell us about your experience")
+   - A newsletter or job alert ("new job opportunities", "jobs you might like")
+   - A promotional email ("special price", "offer expires")
+   - A profile notification ("your profile is getting hits", "someone viewed your profile")
+   - An unsubscribe confirmation
+   - Any email that does NOT directly confirm, update, or change a job application status
+
 3. Extract company_name — search in this ORDER:
 
    STEP 1: Check the email SIGNATURE (last 5 lines of the email body).
