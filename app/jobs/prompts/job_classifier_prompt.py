@@ -49,6 +49,8 @@ Rules:
    in the email — especially in the signature or closing line.
 
 4. Extract role from subject or body.
+   If role is not explicitly mentioned, return role as "".
+   Do NOT guess or invent a role — leave it empty if not clear.
 
 5. job_id from: Req ID, Job ID, Reference Number, Requisition Number
    (e.g. R0000378914). If none: ""

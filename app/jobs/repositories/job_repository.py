@@ -119,6 +119,33 @@ async def get_job_by_company_and_role(
     return result
 
 
+async def get_job_by_company_only(
+    user_email: str,
+    company_name: str,
+):
+    """
+    Match by company name only — used when role was previously
+    saved as "Unknown Role" and a follow-up email has more details.
+    Returns the most recently updated job for this company.
+    """
+    jobs = db.db["job_applications"]
+
+    result = jobs.find_one(
+        {
+            "user_email":   user_email,
+            "company_name": company_name,
+        },
+        sort=[("last_updated", -1)],
+    )
+
+    if not result:
+        return None
+
+    result["id"] = str(result.pop("_id"))
+
+    return result
+
+
 # ==================================================
 # Get Single Job
 # ==================================================

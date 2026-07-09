@@ -8,6 +8,7 @@ from app.jobs.repositories.job_repository import (
     update_job_status,
     get_job_by_job_id,
     get_job_by_company_and_role,
+    get_job_by_company_only,
     is_gmail_message_processed,
     save_processed_gmail_message,
     get_job_by_gmail_id,
@@ -46,20 +47,40 @@ async def process_job_email(
     role         = (job_data.get("role") or "").strip()
     status       = job_data.get("status", "applied")
 
-    # Only ignore if role is missing — role is the minimum useful info.
-    # If company_name is missing, save with "Unknown Company" fallback
-    if not role:
+    # Only ignore if BOTH company and role are missing
+    # If only role missing → save with "Unknown Role" fallback
+    # If only company missing → save with "Unknown Company" fallback
+    if not role and not company_name:
         return "ignored"
 
     if not company_name:
         company_name = "Unknown Company"
 
+    if not role:
+        role = "Unknown Role"
+
     # --------------------------------------
     # Unique key
     # --------------------------------------
     if job_id:
+        # Most reliable — job ID is always unique
         unique_key = f"{user_email}:{job_id}"
+
+    elif role and role != "Unknown Role" and company_name and company_name != "Unknown Company":
+        # Both known — use company + role
+        unique_key = (
+            f"{user_email}:"
+            f"{company_name.lower()}:"
+            f"{role.lower()}"
+        )
+
+    elif gmail_id:
+        # Fallback — use gmail_id when company or role is unknown
+        # Prevents false duplicate detection across different emails
+        unique_key = f"{user_email}:gmail:{gmail_id}"
+
     else:
+        # Last resort
         unique_key = (
             f"{user_email}:"
             f"{company_name.lower()}:"
@@ -78,7 +99,7 @@ async def process_job_email(
         )
 
     # --------------------------------------
-    # Fallback: company + role
+    # Fallback 1: company + role exact match
     # --------------------------------------
     if not existing_job:
         existing_job = await get_job_by_company_and_role(
@@ -86,6 +107,26 @@ async def process_job_email(
             company_name=company_name,
             role=role,
         )
+
+    # --------------------------------------
+    # Fallback 2: company only match
+    # Handles case where original was saved with "Unknown Role"
+    # and follow-up email has the actual role
+    # e.g. "Applied at Machinify" → "Interview at Machinify for SWE"
+    # --------------------------------------
+    if not existing_job and company_name and company_name != "Unknown Company":
+        existing_job = await get_job_by_company_only(
+            user_email=user_email,
+            company_name=company_name,
+        )
+        # If found via company-only match and role was unknown → update role too
+        if existing_job and existing_job.get("role") == "Unknown Role" and role and role != "Unknown Role":
+            from app.common.db import db
+            db.db["job_applications"].update_one(
+                {"_id": existing_job["_id"]},
+                {"$set": {"role": role}},
+            )
+            existing_job["role"] = role
 
     # --------------------------------------
     # Update existing job
