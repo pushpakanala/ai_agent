@@ -168,6 +168,9 @@ async def sync_jobs(user_email: str):
 
             # --------------------------------------
             # Skip already processed Gmail messages
+            # BUT reprocess if it was never saved to job_applications
+            # (handles case where email was previously ignored due to
+            #  empty company_name but classifier prompt has since improved)
             # --------------------------------------
             if gmail_id:
 
@@ -180,12 +183,20 @@ async def sync_jobs(user_email: str):
 
                 if already_processed:
 
-                    print(
-                        f"Skipping Gmail ID: {gmail_id}"
+                    # Check if it actually got saved to job_applications
+                    existing = await get_job_by_gmail_id(
+                        user_email=user_email,
+                        gmail_id=gmail_id,
                     )
 
-                    skipped += 1
-                    continue
+                    if existing:
+                        # Already saved — truly skip
+                        skipped += 1
+                        continue
+                    else:
+                        # Was processed but never saved (previously ignored)
+                        # Remove from processed so we can try again
+                        pass
 
             # --------------------------------------
             # Parse email date

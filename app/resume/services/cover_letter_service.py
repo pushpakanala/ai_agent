@@ -1,13 +1,30 @@
 """
 cover_letter_service.py
 ------------------------
-Generates a tailored cover letter from resume plain text + job description.
+Generates a tailored cover letter in a structured professional format
+matching the following layout:
 
-Updated for v3:
-  - Uses OpenAI (gpt-4.1-mini) instead of Claude — consistent with
-    the rest of the simplified module
-  - Takes resume_text (str) directly — no JSON, no render_resume_text()
-  - No dependencies on any deleted services
+  Application for [Role] – [Company]     ← title (italic bold in PDF)
+
+                              Place: [Location]   ← right-aligned
+
+  Dear Hiring Team,
+
+  [Opening paragraph — role + standout achievement]
+
+  [Body paragraph — skills/experience matched to JD]
+
+  [Motivation paragraph — why this company specifically]
+
+  [Closing paragraph — contribution + eagerness]
+
+  Thank you for your time and consideration. I look forward to the
+  opportunity to discuss how I can contribute to your team.
+
+                                          Sincerely,
+
+                                          [Candidate Name]
+                                          Mobile: [Phone if available]
 """
 
 from openai import AsyncOpenAI
@@ -17,19 +34,47 @@ client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 _SYSTEM = """You are an expert cover letter writer and career coach.
 
-Write a compelling, tailored cover letter:
-1. Open with a strong hook — name the role and one standout achievement.
-2. Connect 2-3 of the candidate's skills/projects directly to the JD.
-3. Show genuine enthusiasm for this specific company.
-4. Close with a clear call-to-action (no generic 'I look forward to hearing').
-5. Never invent experience not in the resume.
-6. Use the candidate's real name from the resume.
-Return ONLY the cover letter text — no subject line, no markdown, no preamble."""
+Generate a professional cover letter in EXACTLY this format — follow the structure precisely:
+
+---
+Application for [ROLE] – [COMPANY]
+
+Place: [LOCATION from resume, or leave blank if not found]
+
+Dear Hiring Team,
+
+[Opening paragraph: State the role you're applying for, mention one standout achievement or relevant experience that makes you a strong fit. Be specific and confident.]
+
+[Second paragraph: Highlight 2-3 specific skills or experiences from the resume that directly match the job description requirements. Reference the company's work and how your background aligns with it.]
+
+[Third paragraph: Express genuine enthusiasm for this specific company's mission, product, or impact. Connect your personal motivation to what they do. Be specific — not generic.]
+
+[Fourth paragraph: State your eagerness to contribute. Mention what you would bring to the team specifically.]
+
+Thank you for your time and consideration. I look forward to the opportunity to discuss how I can contribute to your team.
+
+Sincerely,
+
+[Candidate Full Name]
+Mobile: [Phone number from resume if available]
+---
+
+STRICT RULES:
+1. Follow the exact format above — do not add or remove sections
+2. The title line must be: Application for [ROLE] – [COMPANY]
+3. Use "Dear Hiring Team," as the salutation always
+4. Write exactly 4 body paragraphs
+5. End with exactly: "Thank you for your time and consideration. I look forward to the opportunity to discuss how I can contribute to your team."
+6. Sign off with "Sincerely," then candidate name then mobile
+7. Never invent experience not in the resume
+8. Never use generic filler phrases — every sentence must be specific
+9. Extract candidate name and phone from resume
+10. Return ONLY the cover letter — no markdown, no backticks, no preamble"""
 
 _TONE_GUIDE = {
-    "professional":  "Formal, confident, results-focused.",
-    "enthusiastic":  "Warm, energetic, shows genuine passion for the role.",
-    "concise":       "Direct and brief — under 180 words total.",
+    "professional":  "Formal, confident, results-focused. Use precise language.",
+    "enthusiastic":  "Warm, energetic, shows genuine passion for the role and company mission.",
+    "concise":       "Keep each paragraph to 2-3 sentences maximum. Tight and direct.",
 }
 
 
@@ -43,7 +88,7 @@ async def generate_cover_letter(
 
     response = await client.chat.completions.create(
         model="gpt-4.1-mini",
-        max_tokens=500,
+        max_tokens=800,
         temperature=0.4,
         messages=[
             {"role": "system", "content": _SYSTEM},
