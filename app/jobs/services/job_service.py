@@ -41,8 +41,14 @@ async def process_job_email(
     role = (job_data.get("role") or "").strip()
     status = job_data.get("status", "applied")
 
-    if not company_name or not role:
+    # Only skip if role is also missing — if we have a role but no company
+    # use "Unknown Company" as fallback so the email is not silently dropped.
+    # The classifier prompt fix handles company extraction going forward.
+    if not role:
         return "ignored"
+
+    if not company_name:
+        company_name = "Unknown Company"
 
     # --------------------------------------
     # Unique key
