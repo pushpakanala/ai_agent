@@ -197,11 +197,19 @@ async def sync_jobs(user_email: str):
                     )
 
                     if existing:
-                        # Truly already saved — skip
-                        skipped += 1
-                        continue
+                        # Saved with real company name — truly skip
+                        if existing.get("company_name") not in ("Unknown Company", "", None):
+                            skipped += 1
+                            continue
+                        else:
+                            # Saved but with unknown company — reprocess
+                            # to try extracting the real company name
+                            logger.info(
+                                f"Reprocessing email with unknown "
+                                f"company: {gmail_id}"
+                            )
                     else:
-                        # Previously ignored — reprocess
+                        # Not in job_applications — reprocess
                         logger.info(
                             f"Reprocessing previously ignored "
                             f"email: {gmail_id}"
