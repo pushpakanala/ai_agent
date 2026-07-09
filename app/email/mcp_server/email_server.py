@@ -265,34 +265,51 @@ def search_emails(
                 # Multipart emails
                 elif payload.get("parts"):
 
+                    html_body = ""
+
                     for part in payload["parts"]:
 
-                        if part.get(
-                            "mimeType"
-                        ) == "text/plain":
+                        mime = part.get("mimeType", "")
+                        data = part.get("body", {}).get("data")
 
-                            data = (
-                                part.get(
-                                    "body",
-                                    {},
-                                ).get(
-                                    "data"
-                                )
+                        if mime == "text/plain" and data:
+                            body = (
+                                base64.urlsafe_b64decode(data)
+                                .decode("utf-8", errors="ignore")
                             )
+                            break
 
-                            if data:
+                        elif mime == "text/html" and data and not html_body:
+                            import re as _re
+                            raw_html = (
+                                base64.urlsafe_b64decode(data)
+                                .decode("utf-8", errors="ignore")
+                            )
+                            html_body = _re.sub(r"<[^>]+>", " ", raw_html)
+                            html_body = _re.sub(r"\s+", " ", html_body).strip()
 
-                                body = (
-                                    base64.urlsafe_b64decode(
-                                        data
+                        elif mime.startswith("multipart/"):
+                            for subpart in part.get("parts", []):
+                                submime = subpart.get("mimeType", "")
+                                subdata = subpart.get("body", {}).get("data")
+                                if submime == "text/plain" and subdata:
+                                    body = (
+                                        base64.urlsafe_b64decode(subdata)
+                                        .decode("utf-8", errors="ignore")
                                     )
-                                    .decode(
-                                        "utf-8",
-                                        errors="ignore",
+                                    break
+                                elif submime == "text/html" and subdata and not html_body:
+                                    import re as _re
+                                    raw_html = (
+                                        base64.urlsafe_b64decode(subdata)
+                                        .decode("utf-8", errors="ignore")
                                     )
-                                )
+                                    html_body = _re.sub(r"<[^>]+>", " ", raw_html)
+                                    html_body = _re.sub(r"\s+", " ", html_body).strip()
 
-                                break
+                    # Use HTML body as fallback if no plain text found
+                    if not body and html_body:
+                        body = html_body
 
             except Exception as e:
 
