@@ -35,6 +35,9 @@ ATS_DOMAINS = {
     "icims.com", "jobvite.com", "smartrecruiters.com", "workable.com",
     "brassring.com", "successfactors.com", "oraclecloud.com",
     "bamboohr.com", "recruitee.com", "ashbyhq.com",
+    # Job boards — real company in email body
+    "linkedin.com", "indeed.com", "glassdoor.com",
+    "ziprecruiter.com", "monster.com", "dice.com",
 }
 
 
@@ -45,6 +48,36 @@ def _extract_company_from_text(subject: str, body: str, sender: str = "") -> str
     """
     full_text = f"{subject}\n{body}"
     lines = full_text.split("\n")
+
+    # Pattern 0: LinkedIn "Your update from [Company]"
+    m = re.search(
+        r"Your update from ([A-Z][A-Za-z0-9&\s\-\.,\']+?)(?:\n|$)",
+        full_text, re.IGNORECASE
+    )
+    if m:
+        name = m.group(1).strip().rstrip(".,!")
+        if 2 < len(name) < 60:
+            return name
+
+    # Pattern 0b: "position at [Company]" or "role at [Company]"
+    m = re.search(
+        r"(?:position|role|opportunity) at ([A-Z][A-Za-z0-9&\s\-\.,\']+?)(?:\s+in|\.|,|!|\n|$)",
+        full_text, re.IGNORECASE
+    )
+    if m:
+        name = m.group(1).strip().rstrip(".,!")
+        if 2 < len(name) < 60:
+            return name
+
+    # Pattern 0c: LinkedIn header "[Role] · [Company] · Location"
+    m = re.search(
+        r"[A-Z][A-Za-z0-9&\s\-\.,\']+\s+[·•\|]\s+([A-Z][A-Za-z0-9&\s\-\.,\']+?)\s+[·•\|]",
+        full_text
+    )
+    if m:
+        name = m.group(1).strip().rstrip(".,!")
+        if 2 < len(name) < 60:
+            return name
 
     # Pattern 1: "career at X" / "careers at X"
     m = re.search(

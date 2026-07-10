@@ -48,10 +48,17 @@ Rules:
 
    STEP 4: Check the SUBJECT LINE for company name.
 
-   IMPORTANT: If the sender email is an ATS platform
+   IMPORTANT: If the sender email is an ATS platform or job board
    (myworkday.com, greenhouse.io, lever.co, taleo.net, icims.com,
-   jobvite.com, smartrecruiters.com) — the real company is NOT the
+   jobvite.com, smartrecruiters.com, linkedin.com, indeed.com,
+   glassdoor.com, ziprecruiter.com) — the real company is NOT the
    sender. Find the real company in the body and signature instead.
+
+   LinkedIn emails always contain the real company name and role
+   in the body. Look for patterns like:
+   - "Your update from [Company]"
+   - "[Role] at [Company]"
+   - "position at [Company]"
 
    NEVER return empty company_name if the company appears ANYWHERE
    in the email — especially in the signature or closing line.
