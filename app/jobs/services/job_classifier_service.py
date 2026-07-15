@@ -212,9 +212,10 @@ _NON_JOB_PATTERNS = [
     r"someone viewed your profile",
     r"special price",
     r"wordpress",
-    r"unsubscribe",
     r"stay connected with",
     r"your subscription",
+    # Note: "unsubscribe" removed — too many real job emails have
+    # unsubscribe links in their footer (Trillion Technology, etc.)
 ]
 
 _NON_JOB_RE = re.compile(

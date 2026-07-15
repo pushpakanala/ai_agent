@@ -24,7 +24,11 @@ async def fetch_recent_job_emails(
         OR hiring
         OR offer
         OR rejection
+        OR applying
+        OR position
+        OR candidacy
         OR "thank you for your interest"
+        OR "thank you for applying"
         OR "no longer available"
         OR "position has been filled"
         OR "we will not be moving forward"
@@ -32,8 +36,10 @@ async def fetch_recent_job_emails(
         OR "pursuing other candidates"
         OR "decided to move forward with other"
         OR "appreciate your interest"
-        OR "applied"
-        OR "candidacy"
+        OR "has been received"
+        OR "your application"
+        OR "forwarded to our"
+        OR "HR Department"
     )
     """
 
