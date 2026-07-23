@@ -38,6 +38,8 @@ ATS_DOMAINS = {
     # Job boards — real company in email body
     "linkedin.com", "indeed.com", "glassdoor.com",
     "ziprecruiter.com", "monster.com", "dice.com",
+    # Company-owned job domains — still need body extraction
+    "mail.amazon.jobs", "amazon.jobs",
 }
 
 
@@ -99,6 +101,16 @@ def _extract_company_from_text(subject: str, body: str, sender: str = "") -> str
         if 2 < len(name) < 60:
             return name
 
+    # Pattern 2b: "interest in working at X" (Amazon style)
+    m = re.search(
+        r"interest in working at ([A-Z][A-Za-z0-9&\\s\\-\\.,\']+?)(?:\\.|,|!|\\n|$)",
+        full_text, re.IGNORECASE
+    )
+    if m:
+        name = m.group(1).strip().rstrip(".,!")
+        if 2 < len(name) < 60:
+            return name
+
     # Pattern 3: "joining X" / "join the X team" / "join X"
     m = re.search(
         r"join(?:ing)? (?:the )?([A-Z][A-Za-z0-9&\s\-\.,']+?)(?:\s+team|\.|,|!|\n|$)",
@@ -109,14 +121,14 @@ def _extract_company_from_text(subject: str, body: str, sender: str = "") -> str
         if 2 < len(name) < 60:
             return name
 
-    # Pattern 4: "X Recruiting Team" / "X Talent Acquisition" / "X HR Team"
+    # Pattern 4: "X Recruiting Team" — limited to short names only
     m = re.search(
-        r"([A-Z][A-Za-z0-9&\s\-\.,']+?)\s+(?:Recruiting Team|Talent Acquisition|HR Team|Hiring Team)",
+        r"\b([A-Z][A-Za-z0-9&]{1,25}(?:\s+[A-Za-z0-9&]{1,20}){0,2})\s+(?:Recruiting Team|Talent Acquisition|HR Team|Hiring Team|Talent Team)\b",
         full_text
     )
     if m:
         name = m.group(1).strip()
-        if 2 < len(name) < 60:
+        if 2 < len(name) < 40:
             return name
 
     # Pattern 5: Last lines of email — company name often in signature
